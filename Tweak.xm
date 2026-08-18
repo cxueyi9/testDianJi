@@ -462,7 +462,7 @@ static void simulateTapWithGSEvent(CGPoint point) {
     
     // ---- 针对 FlutterView 的特殊处理 ----
     if ([hitView isKindOfClass:NSClassFromString(@"FlutterView")]) {
-        NSLog(@"[AutoClick] 🎯 FlutterView detected, using Flutter touch simulation");
+        NSLog(@"[AutoClick] 🎯 FlutterView detected, using direct touch simulation");
         [self simulateFlutterTouchAtPoint:windowPoint onView:hitView];
         return;
     }
@@ -474,6 +474,23 @@ static void simulateTapWithGSEvent(CGPoint point) {
     NSLog(@"[AutoClick] ✅ Direct touchesBegan/Ended sent");
     
     // PTFakeTouch 备用
+    NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
+    if (pointId > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            [PTFakeMetaTouch fakeTouchId:pointId AtPoint:point withTouchPhase:UITouchPhaseEnded];
+        });
+    }
+}
+
+// ---- 新增：Flutter 触摸模拟（简化版） ----
+- (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView {
+    // 直接调用 touchesBegan/Ended
+    UITouch *touch = [[UITouch alloc] initAtPoint:point inView:flutterView];
+    [flutterView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
+    [flutterView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+    NSLog(@"[AutoClick] ✅ FlutterView touches sent directly");
+    
+    // 同时尝试 PTFakeTouch（可能无效，但保留）
     NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
     if (pointId > 0) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
