@@ -9,6 +9,17 @@
 #import "UIEvent+KIFAdditions.h"
 #import "LoadableCategory.h"
 #import "IOHIDEvent+KIF.h"
+#import "UIView-KIFAdditions.h"
+#import "CGGeometry-KIFAdditions.h"
+#import "UIAccessibilityElement-KIFAdditions.h"
+#import "UIApplication-KIFAdditions.h"
+#import "UITouch-KIFAdditions.h"
+#import <objc/runtime.h>
+#import "UIEvent+KIFAdditions.h"
+
+// ====== 添加以下两行 ======
+#define DLog(...) NSLog(__VA_ARGS__)
+#define RLog(...) NSLog(__VA_ARGS__)
 
 KW_FIX_CATEGORY_BUG_M(UIEvent_KIFAdditions)
 
