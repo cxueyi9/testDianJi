@@ -1,3 +1,13 @@
+name: Build Dylib
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  # 也支持手动触发（可选）
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: macos-latest
@@ -11,12 +21,12 @@ jobs:
           sudo chown -R $USER /opt/theos
 
       - name: Install ldid (optional)
-        run: brew install ldid || true  # 即使失败也继续
+        run: brew install ldid || true
 
       - name: Build
         run: |
           export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
-          export CODESIGN=NO   # 强制跳过签名
+          export CODESIGN=NO   # 强制跳过签名，避免 ldid 缺失错误
           make
 
       - name: Upload Artifact
