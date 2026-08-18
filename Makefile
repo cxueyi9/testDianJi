@@ -6,7 +6,6 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = AutoClick
 
-# 仅保留 PTFakeTouch 核心文件
 AutoClick_FILES = Tweak.xm \
     PTFakeMetaTouch.m \
     UITouch-KIFAdditions.m \

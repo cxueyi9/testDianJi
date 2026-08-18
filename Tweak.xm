@@ -3,8 +3,6 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <objc/message.h>
-
-// 导入 PTFakeTouch 主头文件
 #import "PTFakeMetaTouch.h"
 
 // ============================================
@@ -32,6 +30,19 @@ static UIWindow* GetKeyWindow(void) {
     }
     if (!window) window = [[UIApplication sharedApplication].windows firstObject];
     return window;
+}
+
+// ============================================
+// 打印视图层级（用于调试）
+// ============================================
+static void printViewHierarchy(UIView *view, int depth) {
+    if (!view) return;
+    NSMutableString *indent = [NSMutableString string];
+    for (int i = 0; i < depth; i++) [indent appendString:@"  "];
+    NSLog(@"[AutoClick] %@%@ frame:%@", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame));
+    for (UIView *sub in view.subviews) {
+        printViewHierarchy(sub, depth + 1);
+    }
 }
 
 // ============================================
@@ -99,6 +110,61 @@ static void showTapMarkerAtPoint(CGPoint point) {
         } completion:^(BOOL finished) {
             [marker removeFromSuperview];
         }];
+    });
+}
+
+// ============================================
+// GSEvent 模拟（保留作为备用）
+// ============================================
+typedef struct __GSEvent *GSEventRef;
+typedef enum {
+    kGSEventTypeTouchDown = 1,
+    kGSEventTypeTouchUp   = 2,
+} GSEventType;
+static GSEventRef (*GSEventRecordCreate)(GSEventType type, int subtype, CGPoint location, int unknown1, int unknown2, int unknown3) = NULL;
+static void (*GSEventRecordSetPathInfo)(GSEventRef event, CFArrayRef pathInfo) = NULL;
+static void (*GSEventDispatch)(GSEventRef event) = NULL;
+
+static void initGSEvent(void) {
+    void *handle = dlopen("/System/Library/PrivateFrameworks/GraphicsServices.framework/GraphicsServices", RTLD_LAZY);
+    if (handle) {
+        GSEventRecordCreate = (typeof(GSEventRecordCreate))dlsym(handle, "GSEventRecordCreate");
+        GSEventRecordSetPathInfo = (typeof(GSEventRecordSetPathInfo))dlsym(handle, "GSEventRecordSetPathInfo");
+        GSEventDispatch = (typeof(GSEventDispatch))dlsym(handle, "GSEventDispatch");
+        if (GSEventRecordCreate && GSEventDispatch && GSEventRecordSetPathInfo) {
+            NSLog(@"[AutoClick] ✅ GSEvent fully loaded");
+        } else {
+            NSLog(@"[AutoClick] ❌ GSEvent load incomplete");
+        }
+    } else {
+        NSLog(@"[AutoClick] ❌ GraphicsServices framework not found");
+    }
+}
+static void simulateTapWithGSEvent(CGPoint point) {
+    if (!GSEventRecordCreate || !GSEventDispatch) {
+        NSLog(@"[AutoClick] ⚠️ GSEvent not available, skip");
+        return;
+    }
+    GSEventRef down1 = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
+    if (down1) GSEventDispatch(down1);
+    GSEventRef up1 = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
+    if (up1) GSEventDispatch(up1);
+    NSLog(@"[AutoClick] 👆 GSEvent tap (no path)");
+    CFMutableArrayRef path = CFArrayCreateMutable(NULL, 1, &kCFTypeArrayCallBacks);
+    CFArrayAppendValue(path, (const void *)(intptr_t)0);
+    GSEventRef down2 = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
+    if (down2) {
+        if (GSEventRecordSetPathInfo) GSEventRecordSetPathInfo(down2, path);
+        GSEventDispatch(down2);
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        GSEventRef up2 = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
+        if (up2) {
+            if (GSEventRecordSetPathInfo) GSEventRecordSetPathInfo(up2, path);
+            GSEventDispatch(up2);
+        }
+        CFRelease(path);
+        NSLog(@"[AutoClick] 👆 GSEvent tap (with path)");
     });
 }
 
@@ -292,7 +358,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 // ============================================
-// 主管理器
+// 主管理器（包含 hitTest 调试）
 // ============================================
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
@@ -317,6 +383,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     self = [super init];
     if (self) {
         loadConfig();
+        initGSEvent();  // 初始化 GSEvent（备用）
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self showFloatingWindow];
         });
@@ -347,7 +414,42 @@ static void showTapMarkerAtPoint(CGPoint point) {
     // 显示红色标记
     showTapMarkerAtPoint(point);
     
-    // ---- 使用 PTFakeMetaTouch 模拟点击 ----
+    // ---- 获取当前窗口并执行 hitTest 调试 ----
+    UIWindow *window = GetKeyWindow();
+    if (window) {
+        NSLog(@"[AutoClick] 📐 Window frame: %@", NSStringFromCGRect(window.frame));
+        NSLog(@"[AutoClick] 📐 Window transform: %@", NSStringFromCGAffineTransform(window.transform));
+        // 将屏幕坐标转换为窗口坐标
+        CGPoint windowPoint = [window convertPoint:point fromWindow:nil];
+        NSLog(@"[AutoClick] 📐 Screen point (%.0f,%.0f) -> Window point (%.0f,%.0f)", point.x, point.y, windowPoint.x, windowPoint.y);
+        
+        UIView *hitView = [window hitTest:windowPoint withEvent:nil];
+        if (hitView) {
+            NSLog(@"[AutoClick] 🎯 hitTest result: %@ (class: %@)", hitView, NSStringFromClass([hitView class]));
+            // 打印从 hitView 到根视图的层级（最多10层）
+            UIView *parent = hitView;
+            int depth = 0;
+            while (parent && depth < 10) {
+                NSLog(@"[AutoClick]   %@", NSStringFromClass([parent class]));
+                parent = parent.superview;
+                depth++;
+            }
+            // 尝试直接调用 touchesBegan/Ended（绕过事件分发）
+            UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inView:hitView];
+            [hitView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
+            [hitView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+            NSLog(@"[AutoClick] ✅ Direct touchesBegan/Ended sent to hitView");
+        } else {
+            NSLog(@"[AutoClick] ❌ No view at window point (%.0f,%.0f)", windowPoint.x, windowPoint.y);
+            // 打印整个窗口的视图层级（仅前3层，避免过多日志）
+            NSLog(@"[AutoClick] 📋 Printing window view hierarchy (first 3 levels):");
+            [self printViewHierarchy:window depth:0 maxDepth:3];
+        }
+    } else {
+        NSLog(@"[AutoClick] ❌ No window found!");
+    }
+    
+    // ---- 尝试 PTFakeTouch 模拟 ----
     NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
     if (pointId > 0) {
         NSLog(@"[AutoClick] ✅ PTFakeTouch began with pointId: %ld", (long)pointId);
@@ -358,13 +460,27 @@ static void showTapMarkerAtPoint(CGPoint point) {
     } else {
         NSLog(@"[AutoClick] ❌ PTFakeTouch failed to get pointId");
     }
+    
+    // ---- 备用：GSEvent ----
+    simulateTapWithGSEvent(point);
 }
+
+// 辅助：打印有限深度的视图层级
+- (void)printViewHierarchy:(UIView *)view depth:(int)depth maxDepth:(int)maxDepth {
+    if (!view || depth > maxDepth) return;
+    NSMutableString *indent = [NSMutableString string];
+    for (int i = 0; i < depth; i++) [indent appendString:@"  "];
+    NSLog(@"[AutoClick] %@%@ frame:%@", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame));
+    for (UIView *sub in view.subviews) {
+        [self printViewHierarchy:sub depth:depth+1 maxDepth:maxDepth];
+    }
+}
+
 @end
 
 // ============================================
 // dylib 入口
 // ============================================
 __attribute__((constructor)) static void entry(void) {
-    // PTFakeTouch 内部会通过 +load 初始化，无需额外操作
     [AutoClickManager sharedManager];
 }
