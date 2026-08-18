@@ -10,6 +10,12 @@
 #import "UITouch-KIFAdditions.h"
 #import "UIApplication-KIFAdditions.h"
 #import "UIEvent+KIFAdditions.h"
+// 添加 DLog 宏定义（因为原文件未定义）
+#define DLog(...) NSLog(__VA_ARGS__)
+
+// 注释掉第43行的 #warning（或者删除该行）
+// #warning - Keyboard -
+
 static NSMutableArray *touchAry;
 @implementation PTFakeMetaTouch
 
@@ -40,7 +46,7 @@ static NSMutableArray *touchAry;
         touch = nil;
         touch = [[UITouch alloc] initAtPoint:point inWindow:[UIApplication sharedApplication].keyWindow];
         
-#warning - Keyboard -
+//#warning - Keyboard -
         //// Keyboard FIX: Artem Levkovich, ITRex Group: http://itrexgroup.com
         CGRect keyboardFrame;
         // AppDelegate *appDelegate = (AppDelegate *)[[UIApplication sharedApplication] delegate];
