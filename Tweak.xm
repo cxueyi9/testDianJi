@@ -6,6 +6,9 @@
 #import "PTFakeMetaTouch.h"
 #import "UITouch-KIFAdditions.h"
 
+// ===== 添加前向声明 =====
+@class AutoClickFloatingWindow;
+
 // ============================================
 // 辅助函数：获取当前 key window
 // ============================================
