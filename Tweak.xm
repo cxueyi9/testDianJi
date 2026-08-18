@@ -20,8 +20,8 @@ static UIWindow* GetKeyWindow(void) {
                 UIWindowScene *ws = (UIWindowScene *)scene;
                 if (ws.activationState == UISceneActivationStateForegroundActive) {
                     for (UIWindow *w in ws.windows) {
-                        // 排除我们自己的悬浮窗
-                        if ([w isKindOfClass:[AutoClickFloatingWindow class]]) {
+                        // 排除我们自己的悬浮窗（通过类名比较）
+                        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
                             continue;
                         }
                         if (w.isKeyWindow) {
@@ -39,7 +39,7 @@ static UIWindow* GetKeyWindow(void) {
     if (!window) {
         // 降级：取第一个不是悬浮窗的窗口
         for (UIWindow *w in [UIApplication sharedApplication].windows) {
-            if (![w isKindOfClass:[AutoClickFloatingWindow class]]) {
+            if (![NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
                 window = w;
                 break;
             }
