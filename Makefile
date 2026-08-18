@@ -6,7 +6,6 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = AutoClick
 
-# 仅保留必要的 .m 文件
 AutoClick_FILES = Tweak.xm \
     PTFakeMetaTouch.m \
     UITouch-KIFAdditions.m \
@@ -28,7 +27,7 @@ AutoClick_FILES = Tweak.xm \
     UIView-Debugging.m \
     UIWindow-KIFAdditions.m
 
-AutoClick_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability -Wno-unused-function -I.
+AutoClick_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability -Wno-unused-function -I. -DDLog=NSLog -DRLog=NSLog
 AutoClick_LDFLAGS = -framework UIKit -framework Foundation -framework QuartzCore -framework IOKit
 AutoClick_CODESIGN = NO
 
