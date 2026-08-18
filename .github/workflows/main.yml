@@ -32,5 +32,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AutoClick.dylib
-          # 修改这里：指向 debug 子目录
           path: .theos/obj/debug/*.dylib
