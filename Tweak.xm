@@ -410,32 +410,53 @@ static void simulateTapWithGSEvent(CGPoint point) {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
     
+    // ---- 打印所有窗口 ----
+    NSLog(@"[AutoClick] 📋 All windows:");
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        NSLog(@"  Window: %@ hidden:%d frame:%@", NSStringFromClass([w class]), w.hidden, NSStringFromCGRect(w.frame));
+        // 打印窗口的根视图
+        if (w.rootViewController.view) {
+            [self printViewHierarchy:w.rootViewController.view depth:1];
+        }
+    }
+    
     showTapMarkerAtPoint(point);
     
-    // ---- 查找目标窗口 ----
-    UIWindow *targetWindow = nil;
-    for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
-            continue;
-        }
-        if (w.hidden || !w.rootViewController) {
-            continue;
-        }
-        if (w.isKeyWindow) {
-            targetWindow = w;
-            break;
-        }
-        if (!targetWindow) {
-            targetWindow = w;
-        }
+// ---- 遍历所有窗口执行 hitTest ----
+UIView *hitView = nil;
+UIWindow *hitWindow = nil;
+CGPoint hitPoint = CGPointZero;
+
+for (UIWindow *w in [UIApplication sharedApplication].windows) {
+    // 跳过我们自己的悬浮窗
+    if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
+        continue;
     }
-    if (!targetWindow) {
-        NSLog(@"[AutoClick] ❌ No target window found!");
-        return;
+    // 跳过隐藏的或没有根视图控制器的窗口
+    if (w.hidden || !w.rootViewController) {
+        continue;
     }
-    
-    CGPoint windowPoint = [targetWindow convertPoint:point fromWindow:nil];
-    UIView *hitView = [targetWindow hitTest:windowPoint withEvent:nil];
+    // 将屏幕坐标转换到该窗口坐标系
+    CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
+    // 执行 hitTest
+    UIView *view = [w hitTest:windowPoint withEvent:nil];
+    if (view) {
+        hitView = view;
+        hitWindow = w;
+        hitPoint = windowPoint;
+        break; // 找到第一个就停止
+    }
+}
+
+if (!hitView) {
+    NSLog(@"[AutoClick] ❌ No view at point in any window");
+    return;
+}
+
+NSLog(@"[AutoClick] 🎯 Found view: %@ in window: %@ at point: (%.0f,%.0f)", 
+      NSStringFromClass([hitView class]), 
+      NSStringFromClass([hitWindow class]), 
+      hitPoint.x, hitPoint.y);
     if (!hitView) {
         NSLog(@"[AutoClick] ❌ No view at point");
         return;
