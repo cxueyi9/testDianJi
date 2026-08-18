@@ -25,7 +25,7 @@ static GSEventDispatchFunc          GSEventDispatch         = NULL;
 
 // ===== 配置参数 =====
 static CGFloat   gDelay   = 5.0;        // 默认 5 秒
-static CGPoint   gTapPoint = CGPointMake(100, 100); // 默认坐标
+static CGPoint   gTapPoint = CGPointMake(250, 420); // 默认坐标
 
 // ===== 加载 GSEvent 函数 =====
 static void initGSEvent(void) {
