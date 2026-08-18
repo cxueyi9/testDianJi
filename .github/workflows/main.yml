@@ -1,0 +1,30 @@
+name: Build Dylib
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          sudo git clone --recursive https://github.com/theos/theos.git /opt/theos
+          sudo chown -R $USER /opt/theos
+
+      - name: Build
+        run: |
+          export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
+          make
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoClick.dylib
+          path: .theos/obj/*.dylib
