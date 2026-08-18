@@ -33,34 +33,44 @@ static void initGSEvent(void) {
     }
 }
 
+// 模拟点击（两种方式：带路径和不带路径）
 static void simulateTapWithGSEvent(CGPoint point) {
     if (!GSEventRecordCreate || !GSEventDispatch) {
         NSLog(@"[AutoClick] ⚠️ GSEvent not available, skip");
         return;
     }
 
-    // 创建路径信息（占位数组）
-    CFMutableArrayRef path = CFArrayCreateMutable(NULL, 1, &kCFTypeArrayCallBacks);
-    CFArrayAppendValue(path, (const void *)(intptr_t)0);
-
-    GSEventRef down = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
-    if (down) {
-        if (GSEventRecordSetPathInfo) {
-            GSEventRecordSetPathInfo(down, path);
-        }
-        GSEventDispatch(down);
-        NSLog(@"[AutoClick] 👆 GSEvent Down at (%.0f, %.0f)", point.x, point.y);
+    // 方式1：不带路径信息（某些版本有效）
+    GSEventRef down1 = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
+    if (down1) {
+        GSEventDispatch(down1);
+        NSLog(@"[AutoClick] 👆 GSEvent Down (no path)");
+    }
+    GSEventRef up1 = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
+    if (up1) {
+        GSEventDispatch(up1);
+        NSLog(@"[AutoClick] 👆 GSEvent Up (no path)");
     }
 
-    // 延迟抬起（模拟真实点击）
+    // 方式2：带路径信息（iOS 13+ 可能需要）
+    CFMutableArrayRef path = CFArrayCreateMutable(NULL, 1, &kCFTypeArrayCallBacks);
+    CFArrayAppendValue(path, (const void *)(intptr_t)0);
+    GSEventRef down2 = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
+    if (down2) {
+        if (GSEventRecordSetPathInfo) {
+            GSEventRecordSetPathInfo(down2, path);
+        }
+        GSEventDispatch(down2);
+        NSLog(@"[AutoClick] 👆 GSEvent Down (with path)");
+    }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        GSEventRef up = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
-        if (up) {
+        GSEventRef up2 = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
+        if (up2) {
             if (GSEventRecordSetPathInfo) {
-                GSEventRecordSetPathInfo(up, path);
+                GSEventRecordSetPathInfo(up2, path);
             }
-            GSEventDispatch(up);
-            NSLog(@"[AutoClick] 👆 GSEvent Up at (%.0f, %.0f)", point.x, point.y);
+            GSEventDispatch(up2);
+            NSLog(@"[AutoClick] 👆 GSEvent Up (with path)");
         }
         CFRelease(path);
     });
@@ -70,32 +80,17 @@ static void simulateTapWithGSEvent(CGPoint point) {
 // 2. UIControl 模拟（备用）
 // ============================================
 static void simulateTapOnUIControlAtPoint(CGPoint point) {
-    UIWindow *window = nil;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if ([scene isKindOfClass:[UIWindowScene class]]) {
-                UIWindowScene *ws = (UIWindowScene *)scene;
-                if (ws.activationState == UISceneActivationStateForegroundActive) {
-                    for (UIWindow *w in ws.windows) {
-                        if (w.isKeyWindow) {
-                            window = w;
-                            break;
-                        }
-                    }
-                    if (window) break;
-                }
-            }
-        }
-    } else {
-        window = [UIApplication sharedApplication].keyWindow;
-    }
-    if (!window) window = [[UIApplication sharedApplication].windows firstObject];
+    UIWindow *window = [AutoClickManager getKeyWindow];
     if (!window) {
         NSLog(@"[AutoClick] ❌ No window found for UIControl");
         return;
     }
 
-    UIView *targetView = [window hitTest:point withEvent:nil];
+    // 将屏幕坐标转换为窗口坐标（通常相同）
+    CGPoint windowPoint = [window convertPoint:point fromWindow:nil];
+    NSLog(@"[AutoClick] 📐 Screen point(%.0f,%.0f) -> Window point(%.0f,%.0f)", point.x, point.y, windowPoint.x, windowPoint.y);
+
+    UIView *targetView = [window hitTest:windowPoint withEvent:nil];
     if (targetView) {
         NSLog(@"[AutoClick] 🎯 hitTest found: %@ (class: %@)", targetView, NSStringFromClass([targetView class]));
         if ([targetView isKindOfClass:[UIControl class]]) {
@@ -105,7 +100,7 @@ static void simulateTapOnUIControlAtPoint(CGPoint point) {
             NSLog(@"[AutoClick] ⚠️ View is not a UIControl, skipping");
         }
     } else {
-        NSLog(@"[AutoClick] ❌ No view at point (%.0f, %.0f)", point.x, point.y);
+        NSLog(@"[AutoClick] ❌ No view at window point (%.0f, %.0f)", windowPoint.x, windowPoint.y);
     }
 }
 
@@ -114,22 +109,9 @@ static void simulateTapOnUIControlAtPoint(CGPoint point) {
 // ============================================
 static void showTapMarkerAtPoint(CGPoint point) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *window = nil;
-        if (@available(iOS 13.0, *)) {
-            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                if ([scene isKindOfClass:[UIWindowScene class]]) {
-                    UIWindowScene *ws = (UIWindowScene *)scene;
-                    if (ws.activationState == UISceneActivationStateForegroundActive) {
-                        window = ws.keyWindow;
-                        if (window) break;
-                    }
-                }
-            }
-        }
-        if (!window) window = [[UIApplication sharedApplication].windows firstObject];
+        UIWindow *window = [AutoClickManager getKeyWindow];
         if (!window) return;
 
-        // 创建红色圆圈
         UIView *marker = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 30, 30)];
         marker.center = point;
         marker.backgroundColor = [UIColor colorWithRed:1.0 green:0.0 blue:0.0 alpha:0.7];
@@ -139,13 +121,12 @@ static void showTapMarkerAtPoint(CGPoint point) {
         marker.userInteractionEnabled = NO;
         marker.tag = 9999;
 
-        // 移除旧的标记
         UIView *oldMarker = [window viewWithTag:9999];
         if (oldMarker) [oldMarker removeFromSuperview];
 
         [window addSubview:marker];
+        NSLog(@"[AutoClick] 🔴 Marker at (%.0f,%.0f)", point.x, point.y);
 
-        // 0.5秒后淡出消失
         [UIView animateWithDuration:0.5 delay:0.5 options:UIViewAnimationOptionCurveEaseOut animations:^{
             marker.alpha = 0.0;
         } completion:^(BOOL finished) {
@@ -375,14 +356,7 @@ static void saveConfig(void) {
 }
 
 - (UIViewController *)topMostViewController {
-    UIWindow *keyWindow = nil;
-    for (UIWindow *window in [[UIApplication sharedApplication] windows]) {
-        if (!window.hidden && window.rootViewController) {
-            keyWindow = window;
-            break;
-        }
-    }
-    if (!keyWindow) keyWindow = [[UIApplication sharedApplication].windows firstObject];
+    UIWindow *keyWindow = [AutoClickManager getKeyWindow];
     UIViewController *topVC = keyWindow.rootViewController;
     while (topVC.presentedViewController) {
         topVC = topVC.presentedViewController;
@@ -392,10 +366,11 @@ static void saveConfig(void) {
 @end
 
 // ============================================
-// 8. 主管理器
+// 8. 主管理器（提供公共方法）
 // ============================================
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
++ (UIWindow *)getKeyWindow;
 - (void)performClick;
 @end
 
@@ -411,6 +386,30 @@ static void saveConfig(void) {
         instance = [[AutoClickManager alloc] init];
     });
     return instance;
+}
+
++ (UIWindow *)getKeyWindow {
+    UIWindow *window = nil;
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *ws = (UIWindowScene *)scene;
+                if (ws.activationState == UISceneActivationStateForegroundActive) {
+                    for (UIWindow *w in ws.windows) {
+                        if (w.isKeyWindow) {
+                            window = w;
+                            break;
+                        }
+                    }
+                    if (window) break;
+                }
+            }
+        }
+    } else {
+        window = [UIApplication sharedApplication].keyWindow;
+    }
+    if (!window) window = [[UIApplication sharedApplication].windows firstObject];
+    return window;
 }
 
 - (instancetype)init {
@@ -444,42 +443,14 @@ static void saveConfig(void) {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
 
-    // 显示点击标记（可视化）
+    // 显示标记
     showTapMarkerAtPoint(point);
 
-    // 弹出提示
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIViewController *topVC = [self topMostViewController];
-        if (topVC) {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"AutoClick"
-                                                                           message:[NSString stringWithFormat:@"已点击 (%.0f, %.0f)", point.x, point.y]
-                                                                    preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
-            [topVC presentViewController:alert animated:YES completion:nil];
-        }
-    });
-
-    // 先尝试 UIControl 模拟（对按钮有效）
+    // 先尝试 UIControl
     simulateTapOnUIControlAtPoint(point);
 
-    // 再尝试 GSEvent（系统级）
+    // 再尝试 GSEvent
     simulateTapWithGSEvent(point);
-}
-
-- (UIViewController *)topMostViewController {
-    UIWindow *keyWindow = nil;
-    for (UIWindow *window in [[UIApplication sharedApplication] windows]) {
-        if (!window.hidden && window.rootViewController) {
-            keyWindow = window;
-            break;
-        }
-    }
-    if (!keyWindow) keyWindow = [[UIApplication sharedApplication].windows firstObject];
-    UIViewController *topVC = keyWindow.rootViewController;
-    while (topVC.presentedViewController) {
-        topVC = topVC.presentedViewController;
-    }
-    return topVC;
 }
 @end
 
