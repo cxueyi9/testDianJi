@@ -6,11 +6,8 @@
 #import "PTFakeMetaTouch.h"
 #import "UITouch-KIFAdditions.h"
 
-// ===== 添加前向声明 =====
-@class AutoClickFloatingWindow;
-
 // ============================================
-// 辅助函数：获取当前 key window
+// 辅助函数：获取当前 key window（排除悬浮窗）
 // ============================================
 static UIWindow* GetKeyWindow(void) {
     UIWindow *window = nil;
@@ -20,7 +17,7 @@ static UIWindow* GetKeyWindow(void) {
                 UIWindowScene *ws = (UIWindowScene *)scene;
                 if (ws.activationState == UISceneActivationStateForegroundActive) {
                     for (UIWindow *w in ws.windows) {
-                        // 排除我们自己的悬浮窗（通过类名比较）
+                        // 排除我们自己的悬浮窗
                         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
                             continue;
                         }
@@ -37,7 +34,6 @@ static UIWindow* GetKeyWindow(void) {
         window = [UIApplication sharedApplication].keyWindow;
     }
     if (!window) {
-        // 降级：取第一个不是悬浮窗的窗口
         for (UIWindow *w in [UIApplication sharedApplication].windows) {
             if (![NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
                 window = w;
@@ -46,19 +42,6 @@ static UIWindow* GetKeyWindow(void) {
         }
     }
     return window;
-}
-
-// ============================================
-// 打印视图层级（用于调试）
-// ============================================
-static void printViewHierarchy(UIView *view, int depth) {
-    if (!view) return;
-    NSMutableString *indent = [NSMutableString string];
-    for (int i = 0; i < depth; i++) [indent appendString:@"  "];
-    NSLog(@"[AutoClick] %@%@ frame:%@", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame));
-    for (UIView *sub in view.subviews) {
-        printViewHierarchy(sub, depth + 1);
-    }
 }
 
 // ============================================
@@ -130,7 +113,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 }
 
 // ============================================
-// GSEvent 模拟（保留作为备用）
+// GSEvent 模拟（备用）
 // ============================================
 typedef struct __GSEvent *GSEventRef;
 typedef enum {
@@ -374,7 +357,7 @@ static void simulateTapWithGSEvent(CGPoint point) {
 @end
 
 // ============================================
-// 主管理器（包含 hitTest 调试）
+// 主管理器（包含 Flutter 处理）
 // ============================================
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
@@ -399,7 +382,7 @@ static void simulateTapWithGSEvent(CGPoint point) {
     self = [super init];
     if (self) {
         loadConfig();
-        initGSEvent();  // 初始化 GSEvent（备用）
+        initGSEvent();
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self showFloatingWindow];
         });
@@ -482,7 +465,7 @@ static void simulateTapWithGSEvent(CGPoint point) {
     }
 }
 
-// ---- 新增：Flutter 触摸模拟（简化版） ----
+// ---- Flutter 触摸模拟 ----
 - (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView {
     // 直接调用 touchesBegan/Ended
     UITouch *touch = [[UITouch alloc] initAtPoint:point inView:flutterView];
@@ -496,94 +479,6 @@ static void simulateTapWithGSEvent(CGPoint point) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             [PTFakeMetaTouch fakeTouchId:pointId AtPoint:point withTouchPhase:UITouchPhaseEnded];
         });
-    }
-}
-
-// ---- 新增：Flutter 触摸模拟 ----
-- (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView {
-    // 方法1：通过 FlutterViewController 的 channel 发送事件
-    UIViewController *vc = nil;
-    UIResponder *responder = flutterView;
-    while (responder) {
-        if ([responder isKindOfClass:NSClassFromString(@"FlutterViewController")]) {
-            vc = (UIViewController *)responder;
-            break;
-        }
-        responder = [responder nextResponder];
-    }
-    
-    if (vc) {
-        NSLog(@"[AutoClick] ✅ Found FlutterViewController: %@", vc);
-        // 尝试调用 Flutter 引擎的 handleTouchEvent
-        SEL handleTouchSel = NSSelectorFromString(@"handleTouchEvent:");
-        if ([vc respondsToSelector:handleTouchSel]) {
-            // 构造 Flutter 的 Touch 事件对象
-            // 这里需要根据 Flutter 的 API 构造事件，比较复杂
-            // 简单起见，我们尝试通过 MethodChannel 发送
-            [self sendFlutterTouchEventViaChannel:point onView:flutterView];
-        } else {
-            // 尝试通过 FlutterView 的 channel
-            [self sendFlutterTouchEventViaChannel:point onView:flutterView];
-        }
-    } else {
-        NSLog(@"[AutoClick] ❌ No FlutterViewController found");
-    }
-}
-
-- (void)sendFlutterTouchEventViaChannel:(CGPoint)point onView:(UIView *)flutterView {
-    // 获取 FlutterViewController
-    UIResponder *responder = flutterView;
-    while (responder) {
-        if ([responder isKindOfClass:NSClassFromString(@"FlutterViewController")]) {
-            // 获取 MethodChannel 或 Engine
-            id engine = [responder valueForKey:@"engine"];
-            if (engine) {
-                // 通过 MethodChannel 发送事件
-                // 这需要目标 Flutter 应用注册对应的 channel
-                // 如果没有注册，这个方法无效
-                SEL sendMessageSel = NSSelectorFromString(@"sendMessage:arguments:result:");
-                if ([engine respondsToSelector:sendMessageSel]) {
-                    // 尝试发送一个模拟事件到 Flutter
-                    NSDictionary *args = @{
-                        @"x": @(point.x),
-                        @"y": @(point.y),
-                        @"type": @"tap"
-                    };
-                    // 使用 __bridge 避免 ARC 问题
-                    #pragma clang diagnostic push
-                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                    [engine performSelector:sendMessageSel withObject:@"flutter/tap" withObject:args withObject:nil];
-                    #pragma clang diagnostic pop
-                    NSLog(@"[AutoClick] ✅ Flutter MethodChannel message sent");
-                    return;
-                }
-            }
-            break;
-        }
-        responder = [responder nextResponder];
-    }
-    
-    // 备用方案：直接调用 FlutterView 的 touches
-    [self simulateFlutterTouchViaUIEvent:point onView:flutterView];
-}
-
-- (void)simulateFlutterTouchViaUIEvent:(CGPoint)point onView:(UIView *)flutterView {
-    // 创建 UITouch 并发送到 FlutterView
-    // FlutterView 可能直接处理 touchesBegan
-    UITouch *touch = [[UITouch alloc] initAtPoint:point inView:flutterView];
-    [flutterView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
-    [flutterView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
-    NSLog(@"[AutoClick] ✅ FlutterView touches sent directly");
-}
-
-// 辅助：打印有限深度的视图层级
-- (void)printViewHierarchy:(UIView *)view depth:(int)depth maxDepth:(int)maxDepth {
-    if (!view || depth > maxDepth) return;
-    NSMutableString *indent = [NSMutableString string];
-    for (int i = 0; i < depth; i++) [indent appendString:@"  "];
-    NSLog(@"[AutoClick] %@%@ frame:%@", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame));
-    for (UIView *sub in view.subviews) {
-        [self printViewHierarchy:sub depth:depth+1 maxDepth:maxDepth];
     }
 }
 
