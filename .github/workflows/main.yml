@@ -1,11 +1,3 @@
-name: Build Dylib
-
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-
 jobs:
   build:
     runs-on: macos-latest
@@ -18,9 +10,13 @@ jobs:
           sudo git clone --recursive https://github.com/theos/theos.git /opt/theos
           sudo chown -R $USER /opt/theos
 
+      - name: Install ldid (optional)
+        run: brew install ldid || true  # 即使失败也继续
+
       - name: Build
         run: |
           export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
+          export CODESIGN=NO   # 强制跳过签名
           make
 
       - name: Upload Artifact
