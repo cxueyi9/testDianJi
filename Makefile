@@ -6,7 +6,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = AutoClick
 AutoClick_FILES = Tweak.xm
-AutoClick_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability
+AutoClick_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability -Wno-unused-function
 AutoClick_CODESIGN = NO
 
 include $(THEOS_MAKE_PATH)/tweak.mk
