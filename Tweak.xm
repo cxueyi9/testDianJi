@@ -427,82 +427,136 @@ static void simulateTapWithGSEvent(CGPoint point) {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
     
-    // 显示红色标记
     showTapMarkerAtPoint(point);
     
-    // ---- 遍历所有窗口，找到目标 APP 的主窗口（排除悬浮窗） ----
+    // ---- 查找目标窗口 ----
     UIWindow *targetWindow = nil;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        // 排除我们自己创建的悬浮窗
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
-        // 排除隐藏的或没有根视图控制器的窗口
         if (w.hidden || !w.rootViewController) {
             continue;
         }
-        // 优先选择 keyWindow，但如果不是 keyWindow 也可以
         if (w.isKeyWindow) {
             targetWindow = w;
             break;
         }
-        // 如果没有 keyWindow，选第一个可见的窗口
         if (!targetWindow) {
             targetWindow = w;
         }
     }
-    
     if (!targetWindow) {
         NSLog(@"[AutoClick] ❌ No target window found!");
         return;
     }
     
-    NSLog(@"[AutoClick] 📐 Target window: %@ frame:%@", NSStringFromClass([targetWindow class]), NSStringFromCGRect(targetWindow.frame));
-    NSLog(@"[AutoClick] 📐 Target window transform: %@", NSStringFromCGAffineTransform(targetWindow.transform));
-    
-    // 将屏幕坐标转换为目标窗口坐标
     CGPoint windowPoint = [targetWindow convertPoint:point fromWindow:nil];
-    NSLog(@"[AutoClick] 📐 Screen point (%.0f,%.0f) -> Window point (%.0f,%.0f)", point.x, point.y, windowPoint.x, windowPoint.y);
-    
-    // 在目标窗口上执行 hitTest
     UIView *hitView = [targetWindow hitTest:windowPoint withEvent:nil];
-    if (hitView) {
-        NSLog(@"[AutoClick] 🎯 hitTest result: %@ (class: %@)", hitView, NSStringFromClass([hitView class]));
-        // 打印视图层级（简短）
-        UIView *parent = hitView;
-        int depth = 0;
-        while (parent && depth < 8) {
-            NSLog(@"[AutoClick]   %@", NSStringFromClass([parent class]));
-            parent = parent.superview;
-            depth++;
-        }
-    } else {
-        NSLog(@"[AutoClick] ❌ No view at window point (%.0f,%.0f)", windowPoint.x, windowPoint.y);
+    if (!hitView) {
+        NSLog(@"[AutoClick] ❌ No view at point");
+        return;
     }
     
-    // ---- 使用 PTFakeTouch 模拟点击（需要目标窗口） ----
-    // 注意：PTFakeTouch 内部使用 keyWindow，可能仍然会发送到悬浮窗
-    // 所以我们同时使用直接调用 touchesBegan/Ended 的方法
+    NSLog(@"[AutoClick] 🎯 hitTest: %@", NSStringFromClass([hitView class]));
     
-    if (hitView) {
-        // 方法1：直接调用 touchesBegan/Ended（绕过事件分发）
-        UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inView:hitView];
-        [hitView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
-        [hitView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
-        NSLog(@"[AutoClick] ✅ Direct touchesBegan/Ended sent");
+    // ---- 针对 FlutterView 的特殊处理 ----
+    if ([hitView isKindOfClass:NSClassFromString(@"FlutterView")]) {
+        NSLog(@"[AutoClick] 🎯 FlutterView detected, using Flutter touch simulation");
+        [self simulateFlutterTouchAtPoint:windowPoint onView:hitView];
+        return;
     }
     
-    // 方法2：PTFakeTouch（可能会发送到 keyWindow，但试试）
+    // ---- 常规 UIKit 处理 ----
+    UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inView:hitView];
+    [hitView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
+    [hitView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+    NSLog(@"[AutoClick] ✅ Direct touchesBegan/Ended sent");
+    
+    // PTFakeTouch 备用
     NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
     if (pointId > 0) {
-        NSLog(@"[AutoClick] ✅ PTFakeTouch began with pointId: %ld", (long)pointId);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             [PTFakeMetaTouch fakeTouchId:pointId AtPoint:point withTouchPhase:UITouchPhaseEnded];
-            NSLog(@"[AutoClick] ✅ PTFakeTouch ended");
         });
-    } else {
-        NSLog(@"[AutoClick] ❌ PTFakeTouch failed to get pointId");
     }
+}
+
+// ---- 新增：Flutter 触摸模拟 ----
+- (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView {
+    // 方法1：通过 FlutterViewController 的 channel 发送事件
+    UIViewController *vc = nil;
+    UIResponder *responder = flutterView;
+    while (responder) {
+        if ([responder isKindOfClass:NSClassFromString(@"FlutterViewController")]) {
+            vc = (UIViewController *)responder;
+            break;
+        }
+        responder = [responder nextResponder];
+    }
+    
+    if (vc) {
+        NSLog(@"[AutoClick] ✅ Found FlutterViewController: %@", vc);
+        // 尝试调用 Flutter 引擎的 handleTouchEvent
+        SEL handleTouchSel = NSSelectorFromString(@"handleTouchEvent:");
+        if ([vc respondsToSelector:handleTouchSel]) {
+            // 构造 Flutter 的 Touch 事件对象
+            // 这里需要根据 Flutter 的 API 构造事件，比较复杂
+            // 简单起见，我们尝试通过 MethodChannel 发送
+            [self sendFlutterTouchEventViaChannel:point onView:flutterView];
+        } else {
+            // 尝试通过 FlutterView 的 channel
+            [self sendFlutterTouchEventViaChannel:point onView:flutterView];
+        }
+    } else {
+        NSLog(@"[AutoClick] ❌ No FlutterViewController found");
+    }
+}
+
+- (void)sendFlutterTouchEventViaChannel:(CGPoint)point onView:(UIView *)flutterView {
+    // 获取 FlutterViewController
+    UIResponder *responder = flutterView;
+    while (responder) {
+        if ([responder isKindOfClass:NSClassFromString(@"FlutterViewController")]) {
+            // 获取 MethodChannel 或 Engine
+            id engine = [responder valueForKey:@"engine"];
+            if (engine) {
+                // 通过 MethodChannel 发送事件
+                // 这需要目标 Flutter 应用注册对应的 channel
+                // 如果没有注册，这个方法无效
+                SEL sendMessageSel = NSSelectorFromString(@"sendMessage:arguments:result:");
+                if ([engine respondsToSelector:sendMessageSel]) {
+                    // 尝试发送一个模拟事件到 Flutter
+                    NSDictionary *args = @{
+                        @"x": @(point.x),
+                        @"y": @(point.y),
+                        @"type": @"tap"
+                    };
+                    // 使用 __bridge 避免 ARC 问题
+                    #pragma clang diagnostic push
+                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                    [engine performSelector:sendMessageSel withObject:@"flutter/tap" withObject:args withObject:nil];
+                    #pragma clang diagnostic pop
+                    NSLog(@"[AutoClick] ✅ Flutter MethodChannel message sent");
+                    return;
+                }
+            }
+            break;
+        }
+        responder = [responder nextResponder];
+    }
+    
+    // 备用方案：直接调用 FlutterView 的 touches
+    [self simulateFlutterTouchViaUIEvent:point onView:flutterView];
+}
+
+- (void)simulateFlutterTouchViaUIEvent:(CGPoint)point onView:(UIView *)flutterView {
+    // 创建 UITouch 并发送到 FlutterView
+    // FlutterView 可能直接处理 touchesBegan
+    UITouch *touch = [[UITouch alloc] initAtPoint:point inView:flutterView];
+    [flutterView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
+    [flutterView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+    NSLog(@"[AutoClick] ✅ FlutterView touches sent directly");
 }
 
 // 辅助：打印有限深度的视图层级
