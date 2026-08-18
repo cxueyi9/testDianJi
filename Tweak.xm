@@ -5,7 +5,7 @@
 #import <objc/message.h>
 
 // ============================================
-// 0. 前置声明：获取当前窗口的 C 函数
+// 0. 前置函数：获取当前 Key Window
 // ============================================
 static UIWindow* GetKeyWindow(void) {
     UIWindow *window = nil;
@@ -60,7 +60,6 @@ static void initGSEvent(void) {
     }
 }
 
-// 模拟点击（两种方式）
 static void simulateTapWithGSEvent(CGPoint point) {
     if (!GSEventRecordCreate || !GSEventDispatch) {
         NSLog(@"[AutoClick] ⚠️ GSEvent not available, skip");
@@ -68,9 +67,9 @@ static void simulateTapWithGSEvent(CGPoint point) {
     }
     // 方式1：不带路径
     GSEventRef down1 = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
-    if (down1) { GSEventDispatch(down1); }
+    if (down1) GSEventDispatch(down1);
     GSEventRef up1 = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
-    if (up1) { GSEventDispatch(up1); }
+    if (up1) GSEventDispatch(up1);
     NSLog(@"[AutoClick] 👆 GSEvent tap (no path)");
 
     // 方式2：带路径
@@ -145,7 +144,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 }
 
 // ============================================
-// 4. 配置管理（省略，与之前相同）
+// 4. 配置管理
 // ============================================
 static NSString *const kConfigFileName = @"autoclick_config.plist";
 static CGFloat gClickX = 100.0;
@@ -186,7 +185,7 @@ static void saveConfig(void) {
 }
 
 // ============================================
-// 5. 自定义 UIWindow（穿透）—— 略，同前
+// 5. 自定义 UIWindow（穿透）
 // ============================================
 @interface AutoClickFloatingWindow : UIWindow @end
 @implementation AutoClickFloatingWindow
@@ -204,25 +203,175 @@ static void saveConfig(void) {
 @end
 
 // ============================================
-// 6. 设置页面 ViewController（略，同前）
+// 6. 设置页面 ViewController
 // ============================================
 @interface AutoClickSettingsViewController : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *xField;
 @property (nonatomic, strong) UITextField *yField;
 @property (nonatomic, strong) UILabel *floatPosLabel;
 @end
-// ... 实现与之前完全相同（省略节省篇幅，但实际使用需完整复制）
-// 注意：在实现中 topMostViewController 调用 GetKeyWindow() 而非 [AutoClickManager getKeyWindow]
-// 您可以直接沿用之前的代码，但将 [AutoClickManager getKeyWindow] 替换为 GetKeyWindow()
+
+@implementation AutoClickSettingsViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor whiteColor];
+    self.title = @"AutoClick 设置";
+
+    UIBarButtonItem *closeBtn = [[UIBarButtonItem alloc] initWithTitle:@"关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
+    self.navigationItem.leftBarButtonItem = closeBtn;
+
+    CGFloat margin = 20;
+    CGFloat yOffset = 100;
+    CGFloat labelWidth = 80;
+    CGFloat fieldWidth = 120;
+    CGFloat height = 40;
+
+    UILabel *xLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
+    xLabel.text = @"点击 X:";
+    [self.view addSubview:xLabel];
+
+    _xField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
+    _xField.borderStyle = UITextBorderStyleRoundedRect;
+    _xField.keyboardType = UIKeyboardTypeDecimalPad;
+    _xField.text = [NSString stringWithFormat:@"%.0f", gClickX];
+    [self.view addSubview:_xField];
+
+    yOffset += height + 20;
+    UILabel *yLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
+    yLabel.text = @"点击 Y:";
+    [self.view addSubview:yLabel];
+
+    _yField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
+    _yField.borderStyle = UITextBorderStyleRoundedRect;
+    _yField.keyboardType = UIKeyboardTypeDecimalPad;
+    _yField.text = [NSString stringWithFormat:@"%.0f", gClickY];
+    [self.view addSubview:_yField];
+
+    yOffset += height + 30;
+    UIButton *saveBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    saveBtn.frame = CGRectMake(margin, yOffset, 100, 40);
+    [saveBtn setTitle:@"保存" forState:UIControlStateNormal];
+    [saveBtn addTarget:self action:@selector(save) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:saveBtn];
+
+    yOffset += 60;
+    UILabel *floatLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, 200, height)];
+    floatLabel.text = @"悬浮窗左上角:";
+    [self.view addSubview:floatLabel];
+
+    _floatPosLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset + height + 5, 300, height)];
+    _floatPosLabel.text = [NSString stringWithFormat:@"(%.0f, %.0f)", gFloatX, gFloatY];
+    [self.view addSubview:_floatPosLabel];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    _floatPosLabel.text = [NSString stringWithFormat:@"(%.0f, %.0f)", gFloatX, gFloatY];
+}
+
+- (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
+
+- (void)save {
+    CGFloat x = [_xField.text doubleValue];
+    CGFloat y = [_yField.text doubleValue];
+    CGRect screen = [UIScreen mainScreen].bounds;
+    if (x < 0 || x > screen.size.width || y < 0 || y > screen.size.height) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"坐标无效" message:@"请输入屏幕范围内的坐标" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    gClickX = x;
+    gClickY = y;
+    saveConfig();
+    [self close];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
+}
+@end
 
 // ============================================
-// 7. 悬浮窗视图（略，同前，但 topMostViewController 改用 GetKeyWindow）
+// 7. 悬浮窗视图
 // ============================================
 @interface AutoClickFloatingView : UIView
 @property (nonatomic, weak) id target;
 @property (nonatomic, assign) SEL action;
 @end
-// 实现中：UIWindow *keyWindow = GetKeyWindow();
+
+@implementation AutoClickFloatingView
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+        btn.frame = self.bounds;
+        btn.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.85];
+        btn.layer.cornerRadius = frame.size.width / 2;
+        [btn setTitle:@"▶" forState:UIControlStateNormal];
+        [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        btn.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+        [btn addTarget:self action:@selector(buttonTapped) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:btn];
+
+        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(longPress:)];
+        [self addGestureRecognizer:longPress];
+
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
+        [self addGestureRecognizer:pan];
+    }
+    return self;
+}
+
+- (void)buttonTapped {
+    if (self.target && [self.target respondsToSelector:self.action]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [self.target performSelector:self.action];
+#pragma clang diagnostic pop
+    }
+}
+
+- (void)longPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        UIViewController *topVC = [self topMostViewController];
+        if (topVC) {
+            AutoClickSettingsViewController *settingsVC = [[AutoClickSettingsViewController alloc] init];
+            UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:settingsVC];
+            [topVC presentViewController:nav animated:YES completion:nil];
+        }
+    }
+}
+
+- (void)pan:(UIPanGestureRecognizer *)gesture {
+    CGPoint translation = [gesture translationInView:self.superview];
+    CGPoint newCenter = CGPointMake(self.center.x + translation.x, self.center.y + translation.y);
+    CGRect screen = [UIScreen mainScreen].bounds;
+    CGFloat halfSize = self.frame.size.width / 2;
+    newCenter.x = MAX(halfSize, MIN(newCenter.x, screen.size.width - halfSize));
+    newCenter.y = MAX(halfSize, MIN(newCenter.y, screen.size.height - halfSize));
+    self.center = newCenter;
+    [gesture setTranslation:CGPointZero inView:self.superview];
+
+    if (gesture.state == UIGestureRecognizerStateEnded) {
+        gFloatX = self.frame.origin.x;
+        gFloatY = self.frame.origin.y;
+        saveConfig();
+    }
+}
+
+- (UIViewController *)topMostViewController {
+    UIWindow *keyWindow = GetKeyWindow();
+    UIViewController *topVC = keyWindow.rootViewController;
+    while (topVC.presentedViewController) {
+        topVC = topVC.presentedViewController;
+    }
+    return topVC;
+}
+@end
 
 // ============================================
 // 8. 主管理器
