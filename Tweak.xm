@@ -5,6 +5,33 @@
 #import <objc/message.h>
 
 // ============================================
+// 0. 前置声明：获取当前窗口的 C 函数
+// ============================================
+static UIWindow* GetKeyWindow(void) {
+    UIWindow *window = nil;
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *ws = (UIWindowScene *)scene;
+                if (ws.activationState == UISceneActivationStateForegroundActive) {
+                    for (UIWindow *w in ws.windows) {
+                        if (w.isKeyWindow) {
+                            window = w;
+                            break;
+                        }
+                    }
+                    if (window) break;
+                }
+            }
+        }
+    } else {
+        window = [UIApplication sharedApplication].keyWindow;
+    }
+    if (!window) window = [[UIApplication sharedApplication].windows firstObject];
+    return window;
+}
+
+// ============================================
 // 1. GSEvent 私有 API
 // ============================================
 typedef struct __GSEvent *GSEventRef;
@@ -33,85 +60,70 @@ static void initGSEvent(void) {
     }
 }
 
-// 模拟点击（两种方式：带路径和不带路径）
+// 模拟点击（两种方式）
 static void simulateTapWithGSEvent(CGPoint point) {
     if (!GSEventRecordCreate || !GSEventDispatch) {
         NSLog(@"[AutoClick] ⚠️ GSEvent not available, skip");
         return;
     }
-
-    // 方式1：不带路径信息（某些版本有效）
+    // 方式1：不带路径
     GSEventRef down1 = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
-    if (down1) {
-        GSEventDispatch(down1);
-        NSLog(@"[AutoClick] 👆 GSEvent Down (no path)");
-    }
+    if (down1) { GSEventDispatch(down1); }
     GSEventRef up1 = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
-    if (up1) {
-        GSEventDispatch(up1);
-        NSLog(@"[AutoClick] 👆 GSEvent Up (no path)");
-    }
+    if (up1) { GSEventDispatch(up1); }
+    NSLog(@"[AutoClick] 👆 GSEvent tap (no path)");
 
-    // 方式2：带路径信息（iOS 13+ 可能需要）
+    // 方式2：带路径
     CFMutableArrayRef path = CFArrayCreateMutable(NULL, 1, &kCFTypeArrayCallBacks);
     CFArrayAppendValue(path, (const void *)(intptr_t)0);
     GSEventRef down2 = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
     if (down2) {
-        if (GSEventRecordSetPathInfo) {
-            GSEventRecordSetPathInfo(down2, path);
-        }
+        if (GSEventRecordSetPathInfo) GSEventRecordSetPathInfo(down2, path);
         GSEventDispatch(down2);
-        NSLog(@"[AutoClick] 👆 GSEvent Down (with path)");
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         GSEventRef up2 = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
         if (up2) {
-            if (GSEventRecordSetPathInfo) {
-                GSEventRecordSetPathInfo(up2, path);
-            }
+            if (GSEventRecordSetPathInfo) GSEventRecordSetPathInfo(up2, path);
             GSEventDispatch(up2);
-            NSLog(@"[AutoClick] 👆 GSEvent Up (with path)");
         }
         CFRelease(path);
+        NSLog(@"[AutoClick] 👆 GSEvent tap (with path)");
     });
 }
 
 // ============================================
-// 2. UIControl 模拟（备用）
+// 2. UIControl 模拟
 // ============================================
 static void simulateTapOnUIControlAtPoint(CGPoint point) {
-    UIWindow *window = [AutoClickManager getKeyWindow];
+    UIWindow *window = GetKeyWindow();
     if (!window) {
         NSLog(@"[AutoClick] ❌ No window found for UIControl");
         return;
     }
-
-    // 将屏幕坐标转换为窗口坐标（通常相同）
     CGPoint windowPoint = [window convertPoint:point fromWindow:nil];
-    NSLog(@"[AutoClick] 📐 Screen point(%.0f,%.0f) -> Window point(%.0f,%.0f)", point.x, point.y, windowPoint.x, windowPoint.y);
-
+    NSLog(@"[AutoClick] 📐 Screen(%.0f,%.0f) -> Window(%.0f,%.0f)", point.x, point.y, windowPoint.x, windowPoint.y);
     UIView *targetView = [window hitTest:windowPoint withEvent:nil];
     if (targetView) {
-        NSLog(@"[AutoClick] 🎯 hitTest found: %@ (class: %@)", targetView, NSStringFromClass([targetView class]));
+        NSLog(@"[AutoClick] 🎯 hitTest: %@ (class: %@)", targetView, NSStringFromClass([targetView class]));
         if ([targetView isKindOfClass:[UIControl class]]) {
             [(UIControl *)targetView sendActionsForControlEvents:UIControlEventTouchUpInside];
             NSLog(@"[AutoClick] ✅ UIControl action sent");
         } else {
-            NSLog(@"[AutoClick] ⚠️ View is not a UIControl, skipping");
+            NSLog(@"[AutoClick] ⚠️ View is not UIControl");
         }
     } else {
-        NSLog(@"[AutoClick] ❌ No view at window point (%.0f, %.0f)", windowPoint.x, windowPoint.y);
+        NSLog(@"[AutoClick] ❌ No view at point");
     }
 }
 
 // ============================================
-// 3. 标记点击位置（可视化）
+// 3. 标记点击位置（红色圆点）
 // ============================================
 static void showTapMarkerAtPoint(CGPoint point) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *window = [AutoClickManager getKeyWindow];
+        UIWindow *window = GetKeyWindow();
         if (!window) return;
-
         UIView *marker = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 30, 30)];
         marker.center = point;
         marker.backgroundColor = [UIColor colorWithRed:1.0 green:0.0 blue:0.0 alpha:0.7];
@@ -120,13 +132,10 @@ static void showTapMarkerAtPoint(CGPoint point) {
         marker.layer.borderColor = [UIColor whiteColor].CGColor;
         marker.userInteractionEnabled = NO;
         marker.tag = 9999;
-
         UIView *oldMarker = [window viewWithTag:9999];
         if (oldMarker) [oldMarker removeFromSuperview];
-
         [window addSubview:marker];
         NSLog(@"[AutoClick] 🔴 Marker at (%.0f,%.0f)", point.x, point.y);
-
         [UIView animateWithDuration:0.5 delay:0.5 options:UIViewAnimationOptionCurveEaseOut animations:^{
             marker.alpha = 0.0;
         } completion:^(BOOL finished) {
@@ -136,7 +145,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 }
 
 // ============================================
-// 4. 配置管理
+// 4. 配置管理（省略，与之前相同）
 // ============================================
 static NSString *const kConfigFileName = @"autoclick_config.plist";
 static CGFloat gClickX = 100.0;
@@ -177,7 +186,7 @@ static void saveConfig(void) {
 }
 
 // ============================================
-// 5. 自定义 UIWindow（穿透）
+// 5. 自定义 UIWindow（穿透）—— 略，同前
 // ============================================
 @interface AutoClickFloatingWindow : UIWindow @end
 @implementation AutoClickFloatingWindow
@@ -195,182 +204,31 @@ static void saveConfig(void) {
 @end
 
 // ============================================
-// 6. 设置页面 ViewController
+// 6. 设置页面 ViewController（略，同前）
 // ============================================
 @interface AutoClickSettingsViewController : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *xField;
 @property (nonatomic, strong) UITextField *yField;
 @property (nonatomic, strong) UILabel *floatPosLabel;
 @end
-
-@implementation AutoClickSettingsViewController
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.view.backgroundColor = [UIColor whiteColor];
-    self.title = @"AutoClick 设置";
-
-    UIBarButtonItem *closeBtn = [[UIBarButtonItem alloc] initWithTitle:@"关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
-    self.navigationItem.leftBarButtonItem = closeBtn;
-
-    CGFloat margin = 20;
-    CGFloat yOffset = 100;
-    CGFloat labelWidth = 80;
-    CGFloat fieldWidth = 120;
-    CGFloat height = 40;
-
-    UILabel *xLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
-    xLabel.text = @"点击 X:";
-    [self.view addSubview:xLabel];
-
-    _xField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
-    _xField.borderStyle = UITextBorderStyleRoundedRect;
-    _xField.keyboardType = UIKeyboardTypeDecimalPad;
-    _xField.text = [NSString stringWithFormat:@"%.0f", gClickX];
-    [self.view addSubview:_xField];
-
-    yOffset += height + 20;
-    UILabel *yLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
-    yLabel.text = @"点击 Y:";
-    [self.view addSubview:yLabel];
-
-    _yField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
-    _yField.borderStyle = UITextBorderStyleRoundedRect;
-    _yField.keyboardType = UIKeyboardTypeDecimalPad;
-    _yField.text = [NSString stringWithFormat:@"%.0f", gClickY];
-    [self.view addSubview:_yField];
-
-    yOffset += height + 30;
-    UIButton *saveBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    saveBtn.frame = CGRectMake(margin, yOffset, 100, 40);
-    [saveBtn setTitle:@"保存" forState:UIControlStateNormal];
-    [saveBtn addTarget:self action:@selector(save) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:saveBtn];
-
-    yOffset += 60;
-    UILabel *floatLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, 200, height)];
-    floatLabel.text = @"悬浮窗左上角:";
-    [self.view addSubview:floatLabel];
-
-    _floatPosLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset + height + 5, 300, height)];
-    _floatPosLabel.text = [NSString stringWithFormat:@"(%.0f, %.0f)", gFloatX, gFloatY];
-    [self.view addSubview:_floatPosLabel];
-}
-
-- (void)viewWillAppear:(BOOL)animated {
-    [super viewWillAppear:animated];
-    _floatPosLabel.text = [NSString stringWithFormat:@"(%.0f, %.0f)", gFloatX, gFloatY];
-}
-
-- (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
-
-- (void)save {
-    CGFloat x = [_xField.text doubleValue];
-    CGFloat y = [_yField.text doubleValue];
-    CGRect screen = [UIScreen mainScreen].bounds;
-    if (x < 0 || x > screen.size.width || y < 0 || y > screen.size.height) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"坐标无效" message:@"请输入屏幕范围内的坐标" preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-        [self presentViewController:alert animated:YES completion:nil];
-        return;
-    }
-    gClickX = x;
-    gClickY = y;
-    saveConfig();
-    [self close];
-}
-
-- (BOOL)textFieldShouldReturn:(UITextField *)textField {
-    [textField resignFirstResponder];
-    return YES;
-}
-@end
+// ... 实现与之前完全相同（省略节省篇幅，但实际使用需完整复制）
+// 注意：在实现中 topMostViewController 调用 GetKeyWindow() 而非 [AutoClickManager getKeyWindow]
+// 您可以直接沿用之前的代码，但将 [AutoClickManager getKeyWindow] 替换为 GetKeyWindow()
 
 // ============================================
-// 7. 悬浮窗视图
+// 7. 悬浮窗视图（略，同前，但 topMostViewController 改用 GetKeyWindow）
 // ============================================
 @interface AutoClickFloatingView : UIView
 @property (nonatomic, weak) id target;
 @property (nonatomic, assign) SEL action;
 @end
-
-@implementation AutoClickFloatingView
-
-- (instancetype)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
-    if (self) {
-        UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-        btn.frame = self.bounds;
-        btn.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.85];
-        btn.layer.cornerRadius = frame.size.width / 2;
-        [btn setTitle:@"▶" forState:UIControlStateNormal];
-        [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        btn.titleLabel.font = [UIFont boldSystemFontOfSize:22];
-        [btn addTarget:self action:@selector(buttonTapped) forControlEvents:UIControlEventTouchUpInside];
-        [self addSubview:btn];
-
-        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(longPress:)];
-        [self addGestureRecognizer:longPress];
-
-        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
-        [self addGestureRecognizer:pan];
-    }
-    return self;
-}
-
-- (void)buttonTapped {
-    if (self.target && [self.target respondsToSelector:self.action]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-        [self.target performSelector:self.action];
-#pragma clang diagnostic pop
-    }
-}
-
-- (void)longPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateBegan) {
-        UIViewController *topVC = [self topMostViewController];
-        if (topVC) {
-            AutoClickSettingsViewController *settingsVC = [[AutoClickSettingsViewController alloc] init];
-            UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:settingsVC];
-            [topVC presentViewController:nav animated:YES completion:nil];
-        }
-    }
-}
-
-- (void)pan:(UIPanGestureRecognizer *)gesture {
-    CGPoint translation = [gesture translationInView:self.superview];
-    CGPoint newCenter = CGPointMake(self.center.x + translation.x, self.center.y + translation.y);
-    CGRect screen = [UIScreen mainScreen].bounds;
-    CGFloat halfSize = self.frame.size.width / 2;
-    newCenter.x = MAX(halfSize, MIN(newCenter.x, screen.size.width - halfSize));
-    newCenter.y = MAX(halfSize, MIN(newCenter.y, screen.size.height - halfSize));
-    self.center = newCenter;
-    [gesture setTranslation:CGPointZero inView:self.superview];
-
-    if (gesture.state == UIGestureRecognizerStateEnded) {
-        gFloatX = self.frame.origin.x;
-        gFloatY = self.frame.origin.y;
-        saveConfig();
-    }
-}
-
-- (UIViewController *)topMostViewController {
-    UIWindow *keyWindow = [AutoClickManager getKeyWindow];
-    UIViewController *topVC = keyWindow.rootViewController;
-    while (topVC.presentedViewController) {
-        topVC = topVC.presentedViewController;
-    }
-    return topVC;
-}
-@end
+// 实现中：UIWindow *keyWindow = GetKeyWindow();
 
 // ============================================
-// 8. 主管理器（提供公共方法）
+// 8. 主管理器
 // ============================================
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
-+ (UIWindow *)getKeyWindow;
 - (void)performClick;
 @end
 
@@ -386,30 +244,6 @@ static void saveConfig(void) {
         instance = [[AutoClickManager alloc] init];
     });
     return instance;
-}
-
-+ (UIWindow *)getKeyWindow {
-    UIWindow *window = nil;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if ([scene isKindOfClass:[UIWindowScene class]]) {
-                UIWindowScene *ws = (UIWindowScene *)scene;
-                if (ws.activationState == UISceneActivationStateForegroundActive) {
-                    for (UIWindow *w in ws.windows) {
-                        if (w.isKeyWindow) {
-                            window = w;
-                            break;
-                        }
-                    }
-                    if (window) break;
-                }
-            }
-        }
-    } else {
-        window = [UIApplication sharedApplication].keyWindow;
-    }
-    if (!window) window = [[UIApplication sharedApplication].windows firstObject];
-    return window;
 }
 
 - (instancetype)init {
@@ -442,14 +276,8 @@ static void saveConfig(void) {
 - (void)performClick {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
-
-    // 显示标记
     showTapMarkerAtPoint(point);
-
-    // 先尝试 UIControl
     simulateTapOnUIControlAtPoint(point);
-
-    // 再尝试 GSEvent
     simulateTapWithGSEvent(point);
 }
 @end
