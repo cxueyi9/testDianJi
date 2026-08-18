@@ -10,8 +10,7 @@
 #import "UITouch-KIFAdditions.h"
 #import "UIApplication-KIFAdditions.h"
 #import "UIEvent+KIFAdditions.h"
-// 添加 DLog 宏定义（因为原文件未定义）
-#define DLog(...) NSLog(__VA_ARGS__)
+
 
 // 注释掉第43行的 #warning（或者删除该行）
 // #warning - Keyboard -
