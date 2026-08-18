@@ -98,8 +98,35 @@ __attribute__((constructor)) static void entry(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(gDelay * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         // 获取 keyWindow 并转换坐标（若需要）
-        UIWindow *window = [UIApplication sharedApplication].keyWindow;
-        if (!window) {
+        
+        UIWindow *window = nil;
+if (@available(iOS 13.0, *)) {
+    // 使用 connectedScenes 获取 keyWindow
+    NSSet<UIScene *> *scenes = [UIApplication sharedApplication].connectedScenes;
+    for (UIScene *scene in scenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]]) {
+            UIWindowScene *windowScene = (UIWindowScene *)scene;
+            if (windowScene.activationState == UISceneActivationStateForegroundActive) {
+                for (UIWindow *w in windowScene.windows) {
+                    if (w.isKeyWindow) {
+                        window = w;
+                        break;
+                    }
+                }
+                if (window) break;
+            }
+        }
+    }
+} else {
+    // 降级方案
+    window = [UIApplication sharedApplication].keyWindow;
+}
+
+// 如果还是 nil，取第一个可用窗口
+if (!window) {
+    window = [[[UIApplication sharedApplication] windows] firstObject];
+}
+                if (!window) {
             NSLog(@"[AutoClick] No key window found, trying any window");
             window = [[[UIApplication sharedApplication] windows] firstObject];
         }
