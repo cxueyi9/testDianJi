@@ -430,42 +430,69 @@ static void simulateTapWithGSEvent(CGPoint point) {
     // 显示红色标记
     showTapMarkerAtPoint(point);
     
-    // ---- 获取当前窗口并执行 hitTest 调试 ----
-    UIWindow *window = GetKeyWindow();
-    if (window) {
-        NSLog(@"[AutoClick] 📐 Window frame: %@", NSStringFromCGRect(window.frame));
-        NSLog(@"[AutoClick] 📐 Window transform: %@", NSStringFromCGAffineTransform(window.transform));
-        // 将屏幕坐标转换为窗口坐标
-        CGPoint windowPoint = [window convertPoint:point fromWindow:nil];
-        NSLog(@"[AutoClick] 📐 Screen point (%.0f,%.0f) -> Window point (%.0f,%.0f)", point.x, point.y, windowPoint.x, windowPoint.y);
-        
-        UIView *hitView = [window hitTest:windowPoint withEvent:nil];
-        if (hitView) {
-            NSLog(@"[AutoClick] 🎯 hitTest result: %@ (class: %@)", hitView, NSStringFromClass([hitView class]));
-            // 打印从 hitView 到根视图的层级（最多10层）
-            UIView *parent = hitView;
-            int depth = 0;
-            while (parent && depth < 10) {
-                NSLog(@"[AutoClick]   %@", NSStringFromClass([parent class]));
-                parent = parent.superview;
-                depth++;
-            }
-            // 尝试直接调用 touchesBegan/Ended（绕过事件分发）
-            UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inView:hitView];
-            [hitView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
-            [hitView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
-            NSLog(@"[AutoClick] ✅ Direct touchesBegan/Ended sent to hitView");
-        } else {
-            NSLog(@"[AutoClick] ❌ No view at window point (%.0f,%.0f)", windowPoint.x, windowPoint.y);
-            // 打印整个窗口的视图层级（仅前3层，避免过多日志）
-            NSLog(@"[AutoClick] 📋 Printing window view hierarchy (first 3 levels):");
-            [self printViewHierarchy:window depth:0 maxDepth:3];
+    // ---- 遍历所有窗口，找到目标 APP 的主窗口（排除悬浮窗） ----
+    UIWindow *targetWindow = nil;
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        // 排除我们自己创建的悬浮窗
+        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
+            continue;
         }
-    } else {
-        NSLog(@"[AutoClick] ❌ No window found!");
+        // 排除隐藏的或没有根视图控制器的窗口
+        if (w.hidden || !w.rootViewController) {
+            continue;
+        }
+        // 优先选择 keyWindow，但如果不是 keyWindow 也可以
+        if (w.isKeyWindow) {
+            targetWindow = w;
+            break;
+        }
+        // 如果没有 keyWindow，选第一个可见的窗口
+        if (!targetWindow) {
+            targetWindow = w;
+        }
     }
     
-    // ---- 尝试 PTFakeTouch 模拟 ----
+    if (!targetWindow) {
+        NSLog(@"[AutoClick] ❌ No target window found!");
+        return;
+    }
+    
+    NSLog(@"[AutoClick] 📐 Target window: %@ frame:%@", NSStringFromClass([targetWindow class]), NSStringFromCGRect(targetWindow.frame));
+    NSLog(@"[AutoClick] 📐 Target window transform: %@", NSStringFromCGAffineTransform(targetWindow.transform));
+    
+    // 将屏幕坐标转换为目标窗口坐标
+    CGPoint windowPoint = [targetWindow convertPoint:point fromWindow:nil];
+    NSLog(@"[AutoClick] 📐 Screen point (%.0f,%.0f) -> Window point (%.0f,%.0f)", point.x, point.y, windowPoint.x, windowPoint.y);
+    
+    // 在目标窗口上执行 hitTest
+    UIView *hitView = [targetWindow hitTest:windowPoint withEvent:nil];
+    if (hitView) {
+        NSLog(@"[AutoClick] 🎯 hitTest result: %@ (class: %@)", hitView, NSStringFromClass([hitView class]));
+        // 打印视图层级（简短）
+        UIView *parent = hitView;
+        int depth = 0;
+        while (parent && depth < 8) {
+            NSLog(@"[AutoClick]   %@", NSStringFromClass([parent class]));
+            parent = parent.superview;
+            depth++;
+        }
+    } else {
+        NSLog(@"[AutoClick] ❌ No view at window point (%.0f,%.0f)", windowPoint.x, windowPoint.y);
+    }
+    
+    // ---- 使用 PTFakeTouch 模拟点击（需要目标窗口） ----
+    // 注意：PTFakeTouch 内部使用 keyWindow，可能仍然会发送到悬浮窗
+    // 所以我们同时使用直接调用 touchesBegan/Ended 的方法
+    
+    if (hitView) {
+        // 方法1：直接调用 touchesBegan/Ended（绕过事件分发）
+        UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inView:hitView];
+        [hitView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
+        [hitView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+        NSLog(@"[AutoClick] ✅ Direct touchesBegan/Ended sent");
+    }
+    
+    // 方法2：PTFakeTouch（可能会发送到 keyWindow，但试试）
     NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
     if (pointId > 0) {
         NSLog(@"[AutoClick] ✅ PTFakeTouch began with pointId: %ld", (long)pointId);
@@ -476,9 +503,6 @@ static void simulateTapWithGSEvent(CGPoint point) {
     } else {
         NSLog(@"[AutoClick] ❌ PTFakeTouch failed to get pointId");
     }
-    
-    // ---- 备用：GSEvent ----
-    simulateTapWithGSEvent(point);
 }
 
 // 辅助：打印有限深度的视图层级
