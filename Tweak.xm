@@ -1,46 +1,74 @@
-// ============================================
-// 完整 Tweak.xm（包含所有实现）
-// ============================================
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <objc/message.h>
 
-// ----- 1. GSEvent 私有 API -----
+// ============================================
+// 1. GSEvent 私有 API
+// ============================================
 typedef struct __GSEvent *GSEventRef;
 typedef enum {
     kGSEventTypeTouchDown = 1,
     kGSEventTypeTouchUp   = 2,
 } GSEventType;
 
-typedef GSEventRef (*GSEventRecordCreateFunc)(GSEventType type, int subtype, CGPoint location, int unknown1, int unknown2, int unknown3);
-typedef void (*GSEventDispatchFunc)(GSEventRef event);
-
-static GSEventRecordCreateFunc GSEventRecordCreate = NULL;
-static GSEventDispatchFunc     GSEventDispatch     = NULL;
+static GSEventRef (*GSEventRecordCreate)(GSEventType type, int subtype, CGPoint location, int unknown1, int unknown2, int unknown3) = NULL;
+static void (*GSEventRecordSetPathInfo)(GSEventRef event, CFArrayRef pathInfo) = NULL;
+static void (*GSEventDispatch)(GSEventRef event) = NULL;
 
 static void initGSEvent(void) {
     void *handle = dlopen("/System/Library/PrivateFrameworks/GraphicsServices.framework/GraphicsServices", RTLD_LAZY);
     if (handle) {
-        GSEventRecordCreate = (GSEventRecordCreateFunc)dlsym(handle, "GSEventRecordCreate");
-        GSEventDispatch     = (GSEventDispatchFunc)dlsym(handle, "GSEventDispatch");
-        if (GSEventRecordCreate && GSEventDispatch) {
-            NSLog(@"[AutoClick] GSEvent loaded");
+        GSEventRecordCreate = (typeof(GSEventRecordCreate))dlsym(handle, "GSEventRecordCreate");
+        GSEventRecordSetPathInfo = (typeof(GSEventRecordSetPathInfo))dlsym(handle, "GSEventRecordSetPathInfo");
+        GSEventDispatch = (typeof(GSEventDispatch))dlsym(handle, "GSEventDispatch");
+        if (GSEventRecordCreate && GSEventDispatch && GSEventRecordSetPathInfo) {
+            NSLog(@"[AutoClick] ✅ GSEvent fully loaded");
+        } else {
+            NSLog(@"[AutoClick] ❌ GSEvent load incomplete");
         }
+    } else {
+        NSLog(@"[AutoClick] ❌ GraphicsServices framework not found");
     }
 }
 
 static void simulateTapWithGSEvent(CGPoint point) {
-    if (!GSEventRecordCreate || !GSEventDispatch) return;
+    if (!GSEventRecordCreate || !GSEventDispatch) {
+        NSLog(@"[AutoClick] ⚠️ GSEvent not available, skip");
+        return;
+    }
+
+    // 创建路径信息（占位数组）
+    CFMutableArrayRef path = CFArrayCreateMutable(NULL, 1, &kCFTypeArrayCallBacks);
+    CFArrayAppendValue(path, (const void *)(intptr_t)0);
+
     GSEventRef down = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
-    if (down) GSEventDispatch(down);
-    GSEventRef up = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
-    if (up) GSEventDispatch(up);
-    NSLog(@"[AutoClick] GSEvent tap at (%.0f, %.0f)", point.x, point.y);
+    if (down) {
+        if (GSEventRecordSetPathInfo) {
+            GSEventRecordSetPathInfo(down, path);
+        }
+        GSEventDispatch(down);
+        NSLog(@"[AutoClick] 👆 GSEvent Down at (%.0f, %.0f)", point.x, point.y);
+    }
+
+    // 延迟抬起（模拟真实点击）
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        GSEventRef up = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
+        if (up) {
+            if (GSEventRecordSetPathInfo) {
+                GSEventRecordSetPathInfo(up, path);
+            }
+            GSEventDispatch(up);
+            NSLog(@"[AutoClick] 👆 GSEvent Up at (%.0f, %.0f)", point.x, point.y);
+        }
+        CFRelease(path);
+    });
 }
 
-// ----- 2. UIControl 模拟 -----
+// ============================================
+// 2. UIControl 模拟（备用）
+// ============================================
 static void simulateTapOnUIControlAtPoint(CGPoint point) {
     UIWindow *window = nil;
     if (@available(iOS 13.0, *)) {
@@ -63,20 +91,72 @@ static void simulateTapOnUIControlAtPoint(CGPoint point) {
     }
     if (!window) window = [[UIApplication sharedApplication].windows firstObject];
     if (!window) {
-        NSLog(@"[AutoClick] No window");
+        NSLog(@"[AutoClick] ❌ No window found for UIControl");
         return;
     }
 
     UIView *targetView = [window hitTest:point withEvent:nil];
-    if ([targetView isKindOfClass:[UIControl class]]) {
-        [(UIControl *)targetView sendActionsForControlEvents:UIControlEventTouchUpInside];
-        NSLog(@"[AutoClick] UIControl tapped: %@", targetView);
+    if (targetView) {
+        NSLog(@"[AutoClick] 🎯 hitTest found: %@ (class: %@)", targetView, NSStringFromClass([targetView class]));
+        if ([targetView isKindOfClass:[UIControl class]]) {
+            [(UIControl *)targetView sendActionsForControlEvents:UIControlEventTouchUpInside];
+            NSLog(@"[AutoClick] ✅ UIControl action sent");
+        } else {
+            NSLog(@"[AutoClick] ⚠️ View is not a UIControl, skipping");
+        }
     } else {
-        NSLog(@"[AutoClick] No UIControl at point");
+        NSLog(@"[AutoClick] ❌ No view at point (%.0f, %.0f)", point.x, point.y);
     }
 }
 
-// ----- 3. 配置管理 -----
+// ============================================
+// 3. 标记点击位置（可视化）
+// ============================================
+static void showTapMarkerAtPoint(CGPoint point) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *window = nil;
+        if (@available(iOS 13.0, *)) {
+            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                if ([scene isKindOfClass:[UIWindowScene class]]) {
+                    UIWindowScene *ws = (UIWindowScene *)scene;
+                    if (ws.activationState == UISceneActivationStateForegroundActive) {
+                        window = ws.keyWindow;
+                        if (window) break;
+                    }
+                }
+            }
+        }
+        if (!window) window = [[UIApplication sharedApplication].windows firstObject];
+        if (!window) return;
+
+        // 创建红色圆圈
+        UIView *marker = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 30, 30)];
+        marker.center = point;
+        marker.backgroundColor = [UIColor colorWithRed:1.0 green:0.0 blue:0.0 alpha:0.7];
+        marker.layer.cornerRadius = 15;
+        marker.layer.borderWidth = 2;
+        marker.layer.borderColor = [UIColor whiteColor].CGColor;
+        marker.userInteractionEnabled = NO;
+        marker.tag = 9999;
+
+        // 移除旧的标记
+        UIView *oldMarker = [window viewWithTag:9999];
+        if (oldMarker) [oldMarker removeFromSuperview];
+
+        [window addSubview:marker];
+
+        // 0.5秒后淡出消失
+        [UIView animateWithDuration:0.5 delay:0.5 options:UIViewAnimationOptionCurveEaseOut animations:^{
+            marker.alpha = 0.0;
+        } completion:^(BOOL finished) {
+            [marker removeFromSuperview];
+        }];
+    });
+}
+
+// ============================================
+// 4. 配置管理
+// ============================================
 static NSString *const kConfigFileName = @"autoclick_config.plist";
 static CGFloat gClickX = 100.0;
 static CGFloat gClickY = 100.0;
@@ -93,6 +173,9 @@ static void loadConfig(void) {
         if (config[@"clickY"]) gClickY = [config[@"clickY"] doubleValue];
         if (config[@"floatX"]) gFloatX = [config[@"floatX"] doubleValue];
         if (config[@"floatY"]) gFloatY = [config[@"floatY"] doubleValue];
+        NSLog(@"[AutoClick] 📂 Config loaded: click(%.0f,%.0f) float(%.0f,%.0f)", gClickX, gClickY, gFloatX, gFloatY);
+    } else {
+        NSLog(@"[AutoClick] 📂 No config, using defaults");
     }
     CGRect screen = [UIScreen mainScreen].bounds;
     gFloatX = MAX(0, MIN(gFloatX, screen.size.width - kFloatSize));
@@ -109,9 +192,12 @@ static void saveConfig(void) {
     NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
     NSString *configPath = [docPath stringByAppendingPathComponent:kConfigFileName];
     [config writeToFile:configPath atomically:YES];
+    NSLog(@"[AutoClick] 💾 Config saved");
 }
 
-// ----- 4. 自定义 UIWindow（穿透）-----
+// ============================================
+// 5. 自定义 UIWindow（穿透）
+// ============================================
 @interface AutoClickFloatingWindow : UIWindow @end
 @implementation AutoClickFloatingWindow
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
@@ -127,7 +213,9 @@ static void saveConfig(void) {
 }
 @end
 
-// ----- 5. 设置页面 ViewController -----
+// ============================================
+// 6. 设置页面 ViewController
+// ============================================
 @interface AutoClickSettingsViewController : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *xField;
 @property (nonatomic, strong) UITextField *yField;
@@ -207,7 +295,7 @@ static void saveConfig(void) {
     }
     gClickX = x;
     gClickY = y;
-    saveConfig();  // ✅ 保存配置
+    saveConfig();
     [self close];
 }
 
@@ -217,7 +305,9 @@ static void saveConfig(void) {
 }
 @end
 
-// ----- 6. 悬浮窗视图 -----
+// ============================================
+// 7. 悬浮窗视图
+// ============================================
 @interface AutoClickFloatingView : UIView
 @property (nonatomic, weak) id target;
 @property (nonatomic, assign) SEL action;
@@ -280,7 +370,7 @@ static void saveConfig(void) {
     if (gesture.state == UIGestureRecognizerStateEnded) {
         gFloatX = self.frame.origin.x;
         gFloatY = self.frame.origin.y;
-        saveConfig();  // ✅ 保存位置
+        saveConfig();
     }
 }
 
@@ -301,7 +391,9 @@ static void saveConfig(void) {
 }
 @end
 
-// ----- 7. 主管理器 -----
+// ============================================
+// 8. 主管理器
+// ============================================
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
@@ -350,24 +442,28 @@ static void saveConfig(void) {
 
 - (void)performClick {
     CGPoint point = CGPointMake(gClickX, gClickY);
-    NSLog(@"[AutoClick] Perform click at (%.0f, %.0f)", point.x, point.y);
+    NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
+
+    // 显示点击标记（可视化）
+    showTapMarkerAtPoint(point);
 
     // 弹出提示
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *topVC = [self topMostViewController];
         if (topVC) {
-            NSString *msg = [NSString stringWithFormat:@"已点击 (%.0f, %.0f)", point.x, point.y];
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"AutoClick"
-                                                                           message:msg
+                                                                           message:[NSString stringWithFormat:@"已点击 (%.0f, %.0f)", point.x, point.y]
                                                                     preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
             [topVC presentViewController:alert animated:YES completion:nil];
         }
     });
 
-    // 双重点击模拟
-    simulateTapWithGSEvent(point);
+    // 先尝试 UIControl 模拟（对按钮有效）
     simulateTapOnUIControlAtPoint(point);
+
+    // 再尝试 GSEvent（系统级）
+    simulateTapWithGSEvent(point);
 }
 
 - (UIViewController *)topMostViewController {
@@ -387,7 +483,9 @@ static void saveConfig(void) {
 }
 @end
 
-// ----- 8. dylib 入口 -----
+// ============================================
+// 9. dylib 入口
+// ============================================
 __attribute__((constructor)) static void entry(void) {
     initGSEvent();
     [AutoClickManager sharedManager];
