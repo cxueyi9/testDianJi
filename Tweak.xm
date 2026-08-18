@@ -4,6 +4,7 @@
 #import <dlfcn.h>
 #import <objc/message.h>
 #import "PTFakeMetaTouch.h"
+#import "UITouch-KIFAdditions.h"
 
 // ============================================
 // 辅助函数：获取当前 key window
