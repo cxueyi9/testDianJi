@@ -4,8 +4,11 @@
 #import <dlfcn.h>
 #import <objc/message.h>
 
+// 导入 PTFakeTouch 主头文件
+#import "PTFakeMetaTouch.h"
+
 // ============================================
-// 0. 前置函数：获取当前 Key Window
+// 辅助函数：获取当前 key window
 // ============================================
 static UIWindow* GetKeyWindow(void) {
     UIWindow *window = nil;
@@ -32,119 +35,7 @@ static UIWindow* GetKeyWindow(void) {
 }
 
 // ============================================
-// 1. GSEvent 私有 API
-// ============================================
-typedef struct __GSEvent *GSEventRef;
-typedef enum {
-    kGSEventTypeTouchDown = 1,
-    kGSEventTypeTouchUp   = 2,
-} GSEventType;
-
-static GSEventRef (*GSEventRecordCreate)(GSEventType type, int subtype, CGPoint location, int unknown1, int unknown2, int unknown3) = NULL;
-static void (*GSEventRecordSetPathInfo)(GSEventRef event, CFArrayRef pathInfo) = NULL;
-static void (*GSEventDispatch)(GSEventRef event) = NULL;
-
-static void initGSEvent(void) {
-    void *handle = dlopen("/System/Library/PrivateFrameworks/GraphicsServices.framework/GraphicsServices", RTLD_LAZY);
-    if (handle) {
-        GSEventRecordCreate = (typeof(GSEventRecordCreate))dlsym(handle, "GSEventRecordCreate");
-        GSEventRecordSetPathInfo = (typeof(GSEventRecordSetPathInfo))dlsym(handle, "GSEventRecordSetPathInfo");
-        GSEventDispatch = (typeof(GSEventDispatch))dlsym(handle, "GSEventDispatch");
-        if (GSEventRecordCreate && GSEventDispatch && GSEventRecordSetPathInfo) {
-            NSLog(@"[AutoClick] ✅ GSEvent fully loaded");
-        } else {
-            NSLog(@"[AutoClick] ❌ GSEvent load incomplete");
-        }
-    } else {
-        NSLog(@"[AutoClick] ❌ GraphicsServices framework not found");
-    }
-}
-
-static void simulateTapWithGSEvent(CGPoint point) {
-    if (!GSEventRecordCreate || !GSEventDispatch) {
-        NSLog(@"[AutoClick] ⚠️ GSEvent not available, skip");
-        return;
-    }
-    // 方式1：不带路径
-    GSEventRef down1 = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
-    if (down1) GSEventDispatch(down1);
-    GSEventRef up1 = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
-    if (up1) GSEventDispatch(up1);
-    NSLog(@"[AutoClick] 👆 GSEvent tap (no path)");
-
-    // 方式2：带路径
-    CFMutableArrayRef path = CFArrayCreateMutable(NULL, 1, &kCFTypeArrayCallBacks);
-    CFArrayAppendValue(path, (const void *)(intptr_t)0);
-    GSEventRef down2 = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
-    if (down2) {
-        if (GSEventRecordSetPathInfo) GSEventRecordSetPathInfo(down2, path);
-        GSEventDispatch(down2);
-    }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        GSEventRef up2 = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
-        if (up2) {
-            if (GSEventRecordSetPathInfo) GSEventRecordSetPathInfo(up2, path);
-            GSEventDispatch(up2);
-        }
-        CFRelease(path);
-        NSLog(@"[AutoClick] 👆 GSEvent tap (with path)");
-    });
-}
-
-// ============================================
-// 2. UIControl 模拟
-// ============================================
-static void simulateTapOnUIControlAtPoint(CGPoint point) {
-    UIWindow *window = GetKeyWindow();
-    if (!window) {
-        NSLog(@"[AutoClick] ❌ No window found for UIControl");
-        return;
-    }
-    CGPoint windowPoint = [window convertPoint:point fromWindow:nil];
-    NSLog(@"[AutoClick] 📐 Screen(%.0f,%.0f) -> Window(%.0f,%.0f)", point.x, point.y, windowPoint.x, windowPoint.y);
-    UIView *targetView = [window hitTest:windowPoint withEvent:nil];
-    if (targetView) {
-        NSLog(@"[AutoClick] 🎯 hitTest: %@ (class: %@)", targetView, NSStringFromClass([targetView class]));
-        if ([targetView isKindOfClass:[UIControl class]]) {
-            [(UIControl *)targetView sendActionsForControlEvents:UIControlEventTouchUpInside];
-            NSLog(@"[AutoClick] ✅ UIControl action sent");
-        } else {
-            NSLog(@"[AutoClick] ⚠️ View is not UIControl");
-        }
-    } else {
-        NSLog(@"[AutoClick] ❌ No view at point");
-    }
-}
-
-// ============================================
-// 3. 标记点击位置（红色圆点）
-// ============================================
-static void showTapMarkerAtPoint(CGPoint point) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *window = GetKeyWindow();
-        if (!window) return;
-        UIView *marker = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 30, 30)];
-        marker.center = point;
-        marker.backgroundColor = [UIColor colorWithRed:1.0 green:0.0 blue:0.0 alpha:0.7];
-        marker.layer.cornerRadius = 15;
-        marker.layer.borderWidth = 2;
-        marker.layer.borderColor = [UIColor whiteColor].CGColor;
-        marker.userInteractionEnabled = NO;
-        marker.tag = 9999;
-        UIView *oldMarker = [window viewWithTag:9999];
-        if (oldMarker) [oldMarker removeFromSuperview];
-        [window addSubview:marker];
-        NSLog(@"[AutoClick] 🔴 Marker at (%.0f,%.0f)", point.x, point.y);
-        [UIView animateWithDuration:0.5 delay:0.5 options:UIViewAnimationOptionCurveEaseOut animations:^{
-            marker.alpha = 0.0;
-        } completion:^(BOOL finished) {
-            [marker removeFromSuperview];
-        }];
-    });
-}
-
-// ============================================
-// 4. 配置管理
+// 配置管理
 // ============================================
 static NSString *const kConfigFileName = @"autoclick_config.plist";
 static CGFloat gClickX = 100.0;
@@ -185,7 +76,34 @@ static void saveConfig(void) {
 }
 
 // ============================================
-// 5. 自定义 UIWindow（穿透）
+// 标记点击位置（红色圆点）
+// ============================================
+static void showTapMarkerAtPoint(CGPoint point) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *window = GetKeyWindow();
+        if (!window) return;
+        UIView *marker = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 30, 30)];
+        marker.center = point;
+        marker.backgroundColor = [UIColor colorWithRed:1.0 green:0.0 blue:0.0 alpha:0.7];
+        marker.layer.cornerRadius = 15;
+        marker.layer.borderWidth = 2;
+        marker.layer.borderColor = [UIColor whiteColor].CGColor;
+        marker.userInteractionEnabled = NO;
+        marker.tag = 9999;
+        UIView *oldMarker = [window viewWithTag:9999];
+        if (oldMarker) [oldMarker removeFromSuperview];
+        [window addSubview:marker];
+        NSLog(@"[AutoClick] 🔴 Marker at (%.0f,%.0f)", point.x, point.y);
+        [UIView animateWithDuration:0.5 delay:0.5 options:UIViewAnimationOptionCurveEaseOut animations:^{
+            marker.alpha = 0.0;
+        } completion:^(BOOL finished) {
+            [marker removeFromSuperview];
+        }];
+    });
+}
+
+// ============================================
+// 自定义 UIWindow（穿透）
 // ============================================
 @interface AutoClickFloatingWindow : UIWindow @end
 @implementation AutoClickFloatingWindow
@@ -203,7 +121,7 @@ static void saveConfig(void) {
 @end
 
 // ============================================
-// 6. 设置页面 ViewController
+// 设置页面 ViewController
 // ============================================
 @interface AutoClickSettingsViewController : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *xField;
@@ -295,7 +213,7 @@ static void saveConfig(void) {
 @end
 
 // ============================================
-// 7. 悬浮窗视图
+// 悬浮窗视图
 // ============================================
 @interface AutoClickFloatingView : UIView
 @property (nonatomic, weak) id target;
@@ -374,7 +292,7 @@ static void saveConfig(void) {
 @end
 
 // ============================================
-// 8. 主管理器
+// 主管理器
 // ============================================
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
@@ -425,16 +343,28 @@ static void saveConfig(void) {
 - (void)performClick {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
+    
+    // 显示红色标记
     showTapMarkerAtPoint(point);
-    simulateTapOnUIControlAtPoint(point);
-    simulateTapWithGSEvent(point);
+    
+    // ---- 使用 PTFakeMetaTouch 模拟点击 ----
+    NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
+    if (pointId > 0) {
+        NSLog(@"[AutoClick] ✅ PTFakeTouch began with pointId: %ld", (long)pointId);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            [PTFakeMetaTouch fakeTouchId:pointId AtPoint:point withTouchPhase:UITouchPhaseEnded];
+            NSLog(@"[AutoClick] ✅ PTFakeTouch ended");
+        });
+    } else {
+        NSLog(@"[AutoClick] ❌ PTFakeTouch failed to get pointId");
+    }
 }
 @end
 
 // ============================================
-// 9. dylib 入口
+// dylib 入口
 // ============================================
 __attribute__((constructor)) static void entry(void) {
-    initGSEvent();
+    // PTFakeTouch 内部会通过 +load 初始化，无需额外操作
     [AutoClickManager sharedManager];
 }
