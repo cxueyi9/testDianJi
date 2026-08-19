@@ -531,13 +531,12 @@ static void showTapMarkerAtPoint(CGPoint point) {
 
 // ---- 点击入口 ----
 - (void)performClick {
-    CGPoint targetPoint = CGPointMake(gClickX, gClickY);
-    NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", targetPoint.x, targetPoint.y);
-    showTapMarkerAtPoint(targetPoint);
+    CGPoint clickPoint = CGPointMake(gClickX, gClickY);
+    NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", clickPoint.x, clickPoint.y);
+    showTapMarkerAtPoint(clickPoint);
     
     // 收集候选视图（与设置界面一致）
     NSMutableArray *candidates = [NSMutableArray array];
-    CGPoint target = CGPointMake(gClickX, gClickY);
     NSMutableArray *allViews = [NSMutableArray array];
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
@@ -552,8 +551,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
         UIView *vb = (UIView *)b;
         CGPoint ca = [va convertPoint:CGPointMake(CGRectGetMidX(va.bounds), CGRectGetMidY(va.bounds)) toView:nil];
         CGPoint cb = [vb convertPoint:CGPointMake(CGRectGetMidX(vb.bounds), CGRectGetMidY(vb.bounds)) toView:nil];
-        CGFloat da = hypot(ca.x - target.x, ca.y - target.y);
-        CGFloat db = hypot(cb.x - target.x, cb.y - target.y);
+        CGFloat da = hypot(ca.x - clickPoint.x, ca.y - clickPoint.y);
+        CGFloat db = hypot(cb.x - clickPoint.x, cb.y - clickPoint.y);
         if (da < db) return NSOrderedAscending;
         if (da > db) return NSOrderedDescending;
         return NSOrderedSame;
@@ -573,9 +572,9 @@ static void showTapMarkerAtPoint(CGPoint point) {
         saveConfig();
     }
     
-    UIView *target = candidates[gSelectedIndex];
-    NSLog(@"[AutoClick] 🎯 Using candidate index %ld: %@ at (%.0f,%.0f)", (long)gSelectedIndex, NSStringFromClass([target class]), targetPoint.x, targetPoint.y);
-    [self triggerTapOnView:target];
+    UIView *targetView = candidates[gSelectedIndex];
+    NSLog(@"[AutoClick] 🎯 Using candidate index %ld: %@", (long)gSelectedIndex, NSStringFromClass([targetView class]));
+    [self triggerTapOnView:targetView];
 }
 
 - (void)collectAllViews:(UIView *)view intoArray:(NSMutableArray *)array {
