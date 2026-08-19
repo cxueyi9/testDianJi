@@ -320,7 +320,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 // ============================================
-// 主管理器
+// 主管理器（添加了弹窗确认）
 // ============================================
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
@@ -416,12 +416,35 @@ static void showTapMarkerAtPoint(CGPoint point) {
     });
 }
 
-// ---- 触发点击 ----
+// ---- 🔥 带弹窗确认的触发点击 ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
     if (!view) return;
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
     
-    // 🔥 如果传入的是 UILabel，直接使用它的父视图（这是老贝贝图标容器）
+    // ---- 显示弹窗确认 ----
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *topVC = [self topMostViewController];
+        if (!topVC) return;
+        
+        NSString *viewInfo = [NSString stringWithFormat:@"类名: %@\n坐标: (%.0f, %.0f)\n父视图: %@\n窗口: %@",
+                              NSStringFromClass([view class]),
+                              point.x, point.y,
+                              view.superview ? NSStringFromClass([view.superview class]) : @"无",
+                              view.window ? NSStringFromClass([view.window class]) : @"无"];
+        
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"即将点击" message:viewInfo preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+            NSLog(@"[AutoClick] ⛔️ User cancelled click");
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"继续" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+            [self performActualClick:view atPoint:point];
+        }]];
+        [topVC presentViewController:alert animated:YES completion:nil];
+    });
+}
+
+- (void)performActualClick:(UIView *)view atPoint:(CGPoint)point {
+    // 如果传入的是 UILabel，使用它的父视图
     if ([view isKindOfClass:[UILabel class]]) {
         if (view.superview) {
             NSLog(@"[AutoClick] 🔄 UILabel detected, using superview: %@", NSStringFromClass([view.superview class]));
@@ -497,6 +520,15 @@ static void showTapMarkerAtPoint(CGPoint point) {
     });
 }
 
+- (UIViewController *)topMostViewController {
+    UIWindow *keyWindow = GetKeyWindow();
+    UIViewController *topVC = keyWindow.rootViewController;
+    while (topVC.presentedViewController) {
+        topVC = topVC.presentedViewController;
+    }
+    return topVC;
+}
+
 - (void)performClick {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
@@ -541,17 +573,12 @@ static void showTapMarkerAtPoint(CGPoint point) {
     
     NSLog(@"[AutoClick] 🎯 hitTest found: %@", NSStringFromClass([hitView class]));
     
-    // 🔥 关键修改：如果 hitView 是 UILabel，直接使用其父视图作为目标
+    // 如果 hitView 是 UILabel 或 UIImageView，使用其父视图作为目标
     UIView *targetView = hitView;
-    if ([hitView isKindOfClass:[UILabel class]]) {
+    if ([hitView isKindOfClass:[UILabel class]] || [hitView isKindOfClass:[UIImageView class]]) {
         if (hitView.superview) {
             targetView = hitView.superview;
-            NSLog(@"[AutoClick] 🔄 UILabel detected, using superview: %@", NSStringFromClass([targetView class]));
-        }
-    } else if ([hitView isKindOfClass:[UIImageView class]]) {
-        if (hitView.superview) {
-            targetView = hitView.superview;
-            NSLog(@"[AutoClick] 🔄 UIImageView detected, using superview: %@", NSStringFromClass([targetView class]));
+            NSLog(@"[AutoClick] 🔄 %@ detected, using superview: %@", NSStringFromClass([hitView class]), NSStringFromClass([targetView class]));
         }
     }
     
