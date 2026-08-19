@@ -155,6 +155,15 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @property (nonatomic, strong) UILabel *floatPosLabel;
 @end
 
+// ============================================
+// 设置页面 ViewController
+// ============================================
+@interface AutoClickSettingsViewController : UIViewController <UITextFieldDelegate>
+@property (nonatomic, strong) UITextField *xField;
+@property (nonatomic, strong) UITextField *yField;
+@property (nonatomic, strong) UILabel *floatPosLabel;
+@end
+
 @implementation AutoClickSettingsViewController
 
 - (void)viewDidLoad {
@@ -318,7 +327,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 // ============================================
-// 主管理器
+// 主管理器（核心修改）
 // ============================================
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
@@ -395,12 +404,12 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
 }
 
-// ---- 触发点击（尝试手势和UIControl） ----
+// ---- 🔥 核心修改：只执行手势的 target-action，不模拟触摸 ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
     if (!view) return;
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@", NSStringFromClass([view class]));
     
-    // 1. 检查手势
+    // 查找所有手势，直接执行 target-action
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [g valueForKey:@"targets"];
@@ -411,31 +420,47 @@ static void showTapMarkerAtPoint(CGPoint point) {
                     SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
                     if (actionTarget && action) {
                         @try {
+                            // 尝试带参数执行
                             if ([actionTarget respondsToSelector:action]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                                #pragma clang diagnostic push
+                                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
                                 [actionTarget performSelector:action withObject:g];
-#pragma clang diagnostic pop
-                                NSLog(@"[AutoClick] ✅ Gesture action triggered");
+                                #pragma clang diagnostic pop
+                                NSLog(@"[AutoClick] ✅ Gesture action triggered with gesture on %@", actionTarget);
                                 return;
                             }
                         } @catch (NSException *e) {
-                            NSLog(@"[AutoClick] ⚠️ Exception: %@", e);
+                            NSLog(@"[AutoClick] ⚠️ Exception with gesture: %@", e);
+                            // 尝试无参数执行
+                            @try {
+                                if ([actionTarget respondsToSelector:action]) {
+                                    #pragma clang diagnostic push
+                                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                                    [actionTarget performSelector:action];
+                                    #pragma clang diagnostic pop
+                                    NSLog(@"[AutoClick] ✅ Gesture action triggered without gesture on %@", actionTarget);
+                                    return;
+                                }
+                            } @catch (NSException *e2) {
+                                NSLog(@"[AutoClick] ❌ Both attempts failed: %@", e2);
+                            }
                         }
                     }
                 }
             }
+            // 如果找到手势但执行失败，继续尝试其他手势
         }
     }
     
-    // 2. 如果是 UIControl
+    // 如果没有手势，尝试 UIControl
     if ([view isKindOfClass:[UIControl class]]) {
         [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
         NSLog(@"[AutoClick] ✅ UIControl action sent");
         return;
     }
     
-    // 3. 回退到 PTFakeTouch
+    // 如果都没有，使用 PTFakeTouch（但尽量不走到这里）
+    NSLog(@"[AutoClick] ⚠️ No gesture or UIControl, using PTFakeTouch");
     CGPoint screenPoint = [view convertPoint:point toView:nil];
     [self sendTapAtPoint:screenPoint];
 }
@@ -472,7 +497,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
         CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
         UIView *view = [w hitTest:windowPoint withEvent:nil];
         if (view) {
-            // 跳过 FlutterView 和 UIWindow
             if ([view isKindOfClass:NSClassFromString(@"FlutterView")] || [view isKindOfClass:[UIWindow class]]) {
                 continue;
             }
@@ -487,7 +511,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
         // 向上查找可点击父视图
         UIView *target = hitView;
         while (target) {
-            // 检查是否有手势或 UIControl
             BOOL hasTapGesture = NO;
             for (UIGestureRecognizer *g in target.gestureRecognizers) {
                 if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
@@ -497,12 +520,12 @@ static void showTapMarkerAtPoint(CGPoint point) {
             }
             if (hasTapGesture || [target isKindOfClass:[UIControl class]]) {
                 NSLog(@"[AutoClick] 🎯 Found responsive parent: %@", NSStringFromClass([target class]));
-                [self triggerTapOnView:target atPoint:[target convertPoint:hitPoint fromView:hitView.superview]];
+                CGPoint convertedPoint = [target convertPoint:hitPoint fromView:hitView.superview];
+                [self triggerTapOnView:target atPoint:convertedPoint];
                 return;
             }
             target = target.superview;
         }
-        // 如果没有找到可点击父视图，直接用 hitView
         NSLog(@"[AutoClick] ⚠️ No responsive parent, using hitView directly");
         [self triggerTapOnView:hitView atPoint:hitPoint];
     } else {
