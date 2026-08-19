@@ -395,11 +395,12 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
 }
 
-// ---- 只执行手势的 target-action，不模拟触摸 ----
+// ---- 只执行手势的 target-action，不模拟触摸，不传递参数 ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
     if (!view) return;
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@", NSStringFromClass([view class]));
     
+    // 先尝试无参数执行所有手势的 target-action
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [g valueForKey:@"targets"];
@@ -410,26 +411,29 @@ static void showTapMarkerAtPoint(CGPoint point) {
                     SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
                     if (actionTarget && action) {
                         @try {
+                            // 只执行不带参数的方法
                             if ([actionTarget respondsToSelector:action]) {
                                 #pragma clang diagnostic push
                                 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                                [actionTarget performSelector:action withObject:g];
+                                [actionTarget performSelector:action];
                                 #pragma clang diagnostic pop
-                                NSLog(@"[AutoClick] ✅ Gesture action triggered (with gesture) on %@", actionTarget);
+                                NSLog(@"[AutoClick] ✅ Gesture action triggered (no params) on %@", actionTarget);
                                 return;
                             }
                         } @catch (NSException *e) {
+                            NSLog(@"[AutoClick] ⚠️ Exception (no params): %@", e);
+                            // 尝试带参数（如果上面失败）
                             @try {
                                 if ([actionTarget respondsToSelector:action]) {
                                     #pragma clang diagnostic push
                                     #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                                    [actionTarget performSelector:action];
+                                    [actionTarget performSelector:action withObject:g];
                                     #pragma clang diagnostic pop
-                                    NSLog(@"[AutoClick] ✅ Gesture action triggered (without gesture) on %@", actionTarget);
+                                    NSLog(@"[AutoClick] ✅ Gesture action triggered (with gesture) on %@", actionTarget);
                                     return;
                                 }
                             } @catch (NSException *e2) {
-                                NSLog(@"[AutoClick] ⚠️ Exception: %@", e2);
+                                NSLog(@"[AutoClick] ❌ Both attempts failed: %@", e2);
                             }
                         }
                     }
@@ -438,13 +442,14 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
+    // 如果是 UIControl，发送事件
     if ([view isKindOfClass:[UIControl class]]) {
         [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
         NSLog(@"[AutoClick] ✅ UIControl action sent");
         return;
     }
     
-    // 如果都没有，使用 PTFakeTouch
+    // 如果都没有，使用 PTFakeTouch（但尽量不走到这里）
     CGPoint screenPoint = [view convertPoint:point toView:nil];
     [self sendTapAtPoint:screenPoint];
 }
