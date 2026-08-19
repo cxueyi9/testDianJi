@@ -389,6 +389,40 @@ static void showTapMarkerAtPoint(CGPoint point) {
         NSLog(@"[AutoClick] ❌ Window is nil");
         return;
     }
+    @try {
+        CGPoint windowPoint = [window convertPoint:screenPoint fromWindow:nil];
+        NSLog(@"[AutoClick] 📱 Sending touch at screen(%.0f,%.0f) -> window(%.0f,%.0f) duration %.2f", screenPoint.x, screenPoint.y, windowPoint.x, windowPoint.y, duration);
+        
+        UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inWindow:window];
+        if (!touch) {
+            NSLog(@"[AutoClick] ❌ Failed to create touch");
+            return;
+        }
+        [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
+        [touch setTapCount:1];
+        
+        UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
+        [event _clearTouches];
+        [event kif_setEventWithTouches:@[touch]];
+        [event _addTouch:touch forDelayedDelivery:NO];
+        [[UIApplication sharedApplication] sendEvent:event];
+        
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            @try {
+                [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
+                [event _clearTouches];
+                [event kif_setEventWithTouches:@[touch]];
+                [event _addTouch:touch forDelayedDelivery:NO];
+                [[UIApplication sharedApplication] sendEvent:event];
+                NSLog(@"[AutoClick] ✅ Touch ended");
+            } @catch (NSException *e) {
+                NSLog(@"[AutoClick] ⚠️ Exception in touch end: %@", e);
+            }
+        });
+    } @catch (NSException *e) {
+        NSLog(@"[AutoClick] ❌ Exception in sendTapAtPoint: %@", e);
+    }
+}
     // 将屏幕坐标转换为窗口坐标
     CGPoint windowPoint = [window convertPoint:screenPoint fromWindow:nil];
     NSLog(@"[AutoClick] 📱 Sending touch at screen(%.0f,%.0f) -> window(%.0f,%.0f) duration %.2f", screenPoint.x, screenPoint.y, windowPoint.x, windowPoint.y, duration);
@@ -419,6 +453,9 @@ static void showTapMarkerAtPoint(CGPoint point) {
 }
 
 // ---- 触发点击 ----
+// 在 triggerTapOnView 中，只发送短按，取消长按
+// 修改 triggerTapOnView 如下：
+
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
     if (!view) return;
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
@@ -480,10 +517,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
         return;
     }
     
-    // point 已经是屏幕坐标，直接使用
+    // 只发送短按 (0.2秒)，不发送长按
     NSLog(@"[AutoClick] 📐 Using screen point directly: (%.0f,%.0f)", point.x, point.y);
-    
-    // 只发送短按 (0.2秒)
     [self sendTapAtPoint:point inWindow:window withDuration:0.2];
 }
 
