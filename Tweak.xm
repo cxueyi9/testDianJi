@@ -245,7 +245,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
             continue;
         }
         if (w.hidden) continue;
-        // 递归收集子视图
         [self collectViews:w intoArray:candidates descriptions:descriptions screenBounds:screen];
     }
     
@@ -269,16 +268,14 @@ static void showTapMarkerAtPoint(CGPoint point) {
 
 - (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)candidates descriptions:(NSMutableArray *)descriptions screenBounds:(CGRect)screen {
     if (!view || view.hidden) return;
-    // 检查视图是否可能是一个悬浮图标：frame 在屏幕内，大小适中（20~120），且不是透明或隐藏的
     CGRect frame = view.frame;
     CGFloat w = frame.size.width;
     CGFloat h = frame.size.height;
     BOOL inScreen = CGRectIntersectsRect(frame, screen) && !CGRectIsEmpty(frame);
     BOOL sizeOk = (w >= 20 && w <= 120 && h >= 20 && h <= 120);
-    // 排除 UIDimmingView、UILabel 等非交互视图（但允许 UIImageView、UIButton、UIView 等）
     NSString *className = NSStringFromClass([view class]);
     BOOL isExcluded = [className isEqualToString:@"UIDimmingView"] || [className isEqualToString:@"UILabel"];
-    // 如果 view 有手势或属于 UIControl，更可能是交互的
+    // 检查是否可交互
     BOOL interactive = NO;
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
@@ -288,13 +285,10 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
     if ([view isKindOfClass:[UIControl class]]) interactive = YES;
     
-    // 如果满足条件，加入候选
-    if (inScreen && sizeOk && !isExcluded) {
+    if (inScreen && sizeOk && !isExcluded && interactive) {
         [candidates addObject:view];
-        NSString *desc = [NSString stringWithFormat:@"%@ (%.0f,%.0f,%.0f,%.0f)", className, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height];
-        [descriptions addObject:desc];
+        [descriptions addObject:[NSString stringWithFormat:@"%@ (%.0f,%.0f,%.0f,%.0f)", className, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]];
     }
-    // 继续遍历子视图
     for (UIView *sub in view.subviews) {
         [self collectViews:sub intoArray:candidates descriptions:descriptions screenBounds:screen];
     }
@@ -344,7 +338,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    // 更新选择
     self.selectedIndex = indexPath.row;
     [tableView reloadData];
 }
@@ -578,7 +571,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     if ([view isKindOfClass:[UIControl class]]) interactive = YES;
-    if (inScreen && sizeOk && !isExcluded) {
+    if (inScreen && sizeOk && !isExcluded && interactive) {
         [candidates addObject:view];
     }
     for (UIView *sub in view.subviews) {
