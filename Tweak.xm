@@ -325,9 +325,9 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
+- (UIView *)findFloatViewInView:(UIView *)view;
 - (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration;
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
-- (void)collectFloatViews:(UIView *)view intoArray:(NSMutableArray *)array;
 @end
 
 @implementation AutoClickManager {
@@ -371,18 +371,19 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 收集所有 FloatView ----
-- (void)collectFloatViews:(UIView *)view intoArray:(NSMutableArray *)array {
+// ---- 递归查找 FloatView ----
+- (UIView *)findFloatViewInView:(UIView *)view {
     if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
-        [array addObject:view];
-        return;
+        return view;
     }
     for (UIView *sub in view.subviews) {
-        [self collectFloatViews:sub intoArray:array];
+        UIView *result = [self findFloatViewInView:sub];
+        if (result) return result;
     }
+    return nil;
 }
 
-// ---- 发送触摸事件到指定窗口的屏幕坐标 ----
+// ---- 发送触摸事件 ----
 - (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration {
     if (!window) {
         NSLog(@"[AutoClick] ❌ Window is nil");
@@ -393,10 +394,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     
     @try {
         UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inWindow:window];
-        if (!touch) {
-            NSLog(@"[AutoClick] ❌ Failed to create touch");
-            return;
-        }
+        if (!touch) { return; }
         [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
         [touch setTapCount:1];
         
@@ -414,26 +412,17 @@ static void showTapMarkerAtPoint(CGPoint point) {
             [[UIApplication sharedApplication] sendEvent:event];
             NSLog(@"[AutoClick] ✅ Touch ended");
         });
-    } @catch (NSException *exception) {
-        NSLog(@"[AutoClick] ❌ Exception in sendTapAtPoint: %@", exception);
+    } @catch (NSException *e) {
+        NSLog(@"[AutoClick] ❌ Exception in sendTapAtPoint: %@", e);
     }
 }
 
 // ---- 触发点击 ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
-    if (!view) {
-        NSLog(@"[AutoClick] ❌ view is nil");
-        return;
-    }
-    // 如果是 FloatView，直接模拟触摸，不检查手势（因为老贝贝图标没有手势）
-    // 但需要确保视图可见且有交互
-    if (!view.userInteractionEnabled || view.hidden) {
-        NSLog(@"[AutoClick] ⚠️ View %@ is not interactive, skip", NSStringFromClass([view class]));
-        return;
-    }
+    if (!view) return;
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
     
-    // 1. 先尝试手势（如果有）
+    // 1. 尝试手势
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [g valueForKey:@"targets"];
@@ -452,9 +441,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
                                 NSLog(@"[AutoClick] ✅ Gesture action triggered (no params) on %@", actionTarget);
                                 return;
                             }
-                        } @catch (NSException *e) {
-                            // 忽略异常
-                        }
+                        } @catch (NSException *e) {}
                     }
                 }
             }
@@ -467,9 +454,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
             [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
             NSLog(@"[AutoClick] ✅ UIControl action sent");
             return;
-        } @catch (NSException *e) {
-            // 忽略
-        }
+        } @catch (NSException *e) {}
     }
     
     // 3. 使用触摸事件（短按 0.2 秒）
@@ -481,44 +466,31 @@ static void showTapMarkerAtPoint(CGPoint point) {
     [self sendTapAtPoint:point inWindow:window withDuration:0.2];
 }
 
+// ---- 点击入口 ----
 - (void)performClick {
     CGPoint targetPoint = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", targetPoint.x, targetPoint.y);
     showTapMarkerAtPoint(targetPoint);
     
-    // ---- 收集所有 FloatView ----
-    NSMutableArray *floatViews = [NSMutableArray array];
+    // ---- 策略1: 查找 FloatView ----
+    UIView *targetFloatView = nil;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
-        if (w.hidden) continue;
-        [self collectFloatViews:w intoArray:floatViews];
+        targetFloatView = [self findFloatViewInView:w];
+        if (targetFloatView) break;
     }
     
-    // 如果有 FloatView，选择距离用户坐标最近的一个
-    if (floatViews.count > 0) {
-        // 按距离排序
-        [floatViews sortUsingComparator:^NSComparisonResult(id a, id b) {
-            UIView *va = (UIView *)a;
-            UIView *vb = (UIView *)b;
-            CGPoint ca = [va convertPoint:CGPointMake(CGRectGetMidX(va.bounds), CGRectGetMidY(va.bounds)) toView:nil];
-            CGPoint cb = [vb convertPoint:CGPointMake(CGRectGetMidX(vb.bounds), CGRectGetMidY(vb.bounds)) toView:nil];
-            CGFloat da = hypot(ca.x - targetPoint.x, ca.y - targetPoint.y);
-            CGFloat db = hypot(cb.x - targetPoint.x, cb.y - targetPoint.y);
-            if (da < db) return NSOrderedAscending;
-            if (da > db) return NSOrderedDescending;
-            return NSOrderedSame;
-        }];
-        UIView *best = floatViews[0];
-        CGPoint center = CGPointMake(CGRectGetMidX(best.bounds), CGRectGetMidY(best.bounds));
-        CGPoint screenCenter = [best convertPoint:center toView:nil];
+    if (targetFloatView) {
+        CGPoint center = CGPointMake(CGRectGetMidX(targetFloatView.bounds), CGRectGetMidY(targetFloatView.bounds));
+        CGPoint screenCenter = [targetFloatView convertPoint:center toView:nil];
         NSLog(@"[AutoClick] 🎯 Found FloatView at screen center (%.0f,%.0f)", screenCenter.x, screenCenter.y);
-        [self triggerTapOnView:best atPoint:screenCenter];
+        [self triggerTapOnView:targetFloatView atPoint:screenCenter];
         return;
     }
     
-    // ---- 如果没有 FloatView，回退到 hitTest 并尝试点击 ----
+    // ---- 策略2: 简单的 hitTest（只点击有手势或 UIControl 的视图） ----
     UIView *hitView = nil;
     CGPoint hitPoint = CGPointZero;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
@@ -529,26 +501,27 @@ static void showTapMarkerAtPoint(CGPoint point) {
         CGPoint windowPoint = [w convertPoint:targetPoint fromWindow:nil];
         UIView *view = [w hitTest:windowPoint withEvent:nil];
         if (view && ![view isKindOfClass:NSClassFromString(@"FlutterView")] && ![view isKindOfClass:[UIWindow class]]) {
-            hitView = view;
-            hitPoint = windowPoint;
-            break;
+            BOOL interactive = NO;
+            for (UIGestureRecognizer *g in view.gestureRecognizers) {
+                if ([g isKindOfClass:[UITapGestureRecognizer class]]) { interactive = YES; break; }
+            }
+            if (interactive || [view isKindOfClass:[UIControl class]]) {
+                hitView = view;
+                hitPoint = windowPoint;
+                break;
+            }
         }
     }
-    if (!hitView) {
-        NSLog(@"[AutoClick] ❌ No view found");
+    
+    if (hitView) {
+        CGPoint center = CGPointMake(CGRectGetMidX(hitView.bounds), CGRectGetMidY(hitView.bounds));
+        CGPoint screenCenter = [hitView convertPoint:center toView:nil];
+        NSLog(@"[AutoClick] 🎯 Fallback hitTest found %@ at (%.0f,%.0f)", NSStringFromClass([hitView class]), screenCenter.x, screenCenter.y);
+        [self triggerTapOnView:hitView atPoint:screenCenter];
         return;
     }
-    NSLog(@"[AutoClick] 🎯 hitTest found: %@", NSStringFromClass([hitView class]));
-    UIView *targetView = hitView;
-    // 如果 hit 到的是 UIImageView 或 UILabel，尝试父视图
-    if ([hitView isKindOfClass:[UIImageView class]] || [hitView isKindOfClass:[UILabel class]]) {
-        if (hitView.superview) {
-            targetView = hitView.superview;
-        }
-    }
-    CGPoint center = CGPointMake(CGRectGetMidX(targetView.bounds), CGRectGetMidY(targetView.bounds));
-    CGPoint screenCenter = [targetView convertPoint:center toView:nil];
-    [self triggerTapOnView:targetView atPoint:screenCenter];
+    
+    NSLog(@"[AutoClick] ❌ No FloatView or interactive view found");
 }
 
 @end
