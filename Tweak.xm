@@ -362,6 +362,19 @@ static void showTapMarkerAtPoint(CGPoint point) {
     
     showTapMarkerAtPoint(point);
     
+    // ---- 打印所有窗口信息 ----
+    NSLog(@"[AutoClick] 📋 All windows:");
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        NSLog(@"  Window: %@, hidden:%d, frame:%@, level:%f", 
+              NSStringFromClass([w class]), w.hidden, 
+              NSStringFromCGRect(w.frame), w.windowLevel);
+        if (w.rootViewController.view) {
+            for (UIView *sub in w.rootViewController.view.subviews) {
+                NSLog(@"    Subview: %@, frame:%@", NSStringFromClass([sub class]), NSStringFromCGRect(sub.frame));
+            }
+        }
+    }
+    
     // ---- 遍历所有窗口执行 hitTest ----
     UIView *hitView = nil;
     UIWindow *hitWindow = nil;
@@ -376,6 +389,9 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
         CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
         UIView *view = [w hitTest:windowPoint withEvent:nil];
+        NSLog(@"[AutoClick] Window %@ hitTest at (%.0f,%.0f) -> %@", 
+              NSStringFromClass([w class]), windowPoint.x, windowPoint.y, 
+              view ? NSStringFromClass([view class]) : @"nil");
         if (view) {
             hitView = view;
             hitWindow = w;
@@ -401,6 +417,13 @@ static void showTapMarkerAtPoint(CGPoint point) {
         NSLog(@"[AutoClick]   %@ frame:%@", NSStringFromClass([parent class]), NSStringFromCGRect(parent.frame));
         parent = parent.superview;
         depth++;
+    }
+
+    // ---- 如果是 UIControl，直接发送事件 ----
+    if ([hitView isKindOfClass:[UIControl class]]) {
+        [(UIControl *)hitView sendActionsForControlEvents:UIControlEventTouchUpInside];
+        NSLog(@"[AutoClick] ✅ UIControl action sent");
+        return;
     }
 
     // ---- 根据视图类型选择模拟方式 ----
