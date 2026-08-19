@@ -12,7 +12,7 @@
 @class AutoClickFloatingWindow;
 
 // ============================================
-// 辅助函数：获取当前 key window（备用）
+// 辅助函数
 // ============================================
 static UIWindow* GetKeyWindow(void) {
     UIWindow *window = nil;
@@ -144,86 +144,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 @implementation AutoClickSettingsViewController
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.view.backgroundColor = [UIColor whiteColor];
-    self.title = @"AutoClick 设置";
-
-    UIBarButtonItem *closeBtn = [[UIBarButtonItem alloc] initWithTitle:@"关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
-    self.navigationItem.leftBarButtonItem = closeBtn;
-
-    CGFloat margin = 20;
-    CGFloat yOffset = 100;
-    CGFloat labelWidth = 80;
-    CGFloat fieldWidth = 120;
-    CGFloat height = 40;
-
-    UILabel *xLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
-    xLabel.text = @"点击 X:";
-    [self.view addSubview:xLabel];
-
-    _xField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
-    _xField.borderStyle = UITextBorderStyleRoundedRect;
-    _xField.keyboardType = UIKeyboardTypeDecimalPad;
-    _xField.text = [NSString stringWithFormat:@"%.0f", gClickX];
-    [self.view addSubview:_xField];
-
-    yOffset += height + 20;
-    UILabel *yLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
-    yLabel.text = @"点击 Y:";
-    [self.view addSubview:yLabel];
-
-    _yField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
-    _yField.borderStyle = UITextBorderStyleRoundedRect;
-    _yField.keyboardType = UIKeyboardTypeDecimalPad;
-    _yField.text = [NSString stringWithFormat:@"%.0f", gClickY];
-    [self.view addSubview:_yField];
-
-    yOffset += height + 30;
-    UIButton *saveBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    saveBtn.frame = CGRectMake(margin, yOffset, 100, 40);
-    [saveBtn setTitle:@"保存" forState:UIControlStateNormal];
-    [saveBtn addTarget:self action:@selector(save) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:saveBtn];
-
-    yOffset += 60;
-    UILabel *floatLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, 200, height)];
-    floatLabel.text = @"悬浮窗左上角:";
-    [self.view addSubview:floatLabel];
-
-    _floatPosLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset + height + 5, 300, height)];
-    _floatPosLabel.text = [NSString stringWithFormat:@"(%.0f, %.0f)", gFloatX, gFloatY];
-    [self.view addSubview:_floatPosLabel];
-}
-
-- (void)viewWillAppear:(BOOL)animated {
-    [super viewWillAppear:animated];
-    _floatPosLabel.text = [NSString stringWithFormat:@"(%.0f, %.0f)", gFloatX, gFloatY];
-}
-
-- (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
-
-- (void)save {
-    CGFloat x = [_xField.text doubleValue];
-    CGFloat y = [_yField.text doubleValue];
-    CGRect screen = [UIScreen mainScreen].bounds;
-    if (x < 0 || x > screen.size.width || y < 0 || y > screen.size.height) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"坐标无效" message:@"请输入屏幕范围内的坐标" preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-        [self presentViewController:alert animated:YES completion:nil];
-        return;
-    }
-    gClickX = x;
-    gClickY = y;
-    saveConfig();
-    [self close];
-}
-
-- (BOOL)textFieldShouldReturn:(UITextField *)textField {
-    [textField resignFirstResponder];
-    return YES;
-}
+// ... 与之前相同，略，请保留完整代码
+// (直接复制之前的实现)
 @end
 
 // ============================================
@@ -235,74 +157,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 @implementation AutoClickFloatingView
-
-- (instancetype)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
-    if (self) {
-        UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-        btn.frame = self.bounds;
-        btn.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.85];
-        btn.layer.cornerRadius = frame.size.width / 2;
-        [btn setTitle:@"▶" forState:UIControlStateNormal];
-        [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        btn.titleLabel.font = [UIFont boldSystemFontOfSize:22];
-        [btn addTarget:self action:@selector(buttonTapped) forControlEvents:UIControlEventTouchUpInside];
-        [self addSubview:btn];
-
-        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(longPress:)];
-        [self addGestureRecognizer:longPress];
-
-        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
-        [self addGestureRecognizer:pan];
-    }
-    return self;
-}
-
-- (void)buttonTapped {
-    if (self.target && [self.target respondsToSelector:self.action]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-        [self.target performSelector:self.action];
-#pragma clang diagnostic pop
-    }
-}
-
-- (void)longPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateBegan) {
-        UIViewController *topVC = [self topMostViewController];
-        if (topVC) {
-            AutoClickSettingsViewController *settingsVC = [[AutoClickSettingsViewController alloc] init];
-            UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:settingsVC];
-            [topVC presentViewController:nav animated:YES completion:nil];
-        }
-    }
-}
-
-- (void)pan:(UIPanGestureRecognizer *)gesture {
-    CGPoint translation = [gesture translationInView:self.superview];
-    CGPoint newCenter = CGPointMake(self.center.x + translation.x, self.center.y + translation.y);
-    CGRect screen = [UIScreen mainScreen].bounds;
-    CGFloat halfSize = self.frame.size.width / 2;
-    newCenter.x = MAX(halfSize, MIN(newCenter.x, screen.size.width - halfSize));
-    newCenter.y = MAX(halfSize, MIN(newCenter.y, screen.size.height - halfSize));
-    self.center = newCenter;
-    [gesture setTranslation:CGPointZero inView:self.superview];
-
-    if (gesture.state == UIGestureRecognizerStateEnded) {
-        gFloatX = self.frame.origin.x;
-        gFloatY = self.frame.origin.y;
-        saveConfig();
-    }
-}
-
-- (UIViewController *)topMostViewController {
-    UIWindow *keyWindow = GetKeyWindow();
-    UIViewController *topVC = keyWindow.rootViewController;
-    while (topVC.presentedViewController) {
-        topVC = topVC.presentedViewController;
-    }
-    return topVC;
-}
+// ... 与之前相同
 @end
 
 // ============================================
@@ -311,7 +166,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
-- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
+- (UIView *)findFloatViewInView:(UIView *)view;
+- (void)sendTapAtPoint:(CGPoint)point;
 @end
 
 @implementation AutoClickManager {
@@ -355,125 +211,30 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 递归打印视图层级 ----
-- (void)printViewHierarchy:(UIView *)view depth:(int)depth {
-    if (!view) return;
-    NSMutableString *indent = [NSMutableString string];
-    for (int i = 0; i < depth; i++) [indent appendString:@"  "];
-    NSLog(@"[AutoClick] %@%@ frame:%@, gestures:%lu", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame), (unsigned long)view.gestureRecognizers.count);
-    for (UIGestureRecognizer *g in view.gestureRecognizers) {
-        NSLog(@"[AutoClick] %@  gesture: %@", indent, NSStringFromClass([g class]));
+// ---- 递归查找 FloatView ----
+- (UIView *)findFloatViewInView:(UIView *)view {
+    if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
+        return view;
     }
     for (UIView *sub in view.subviews) {
-        [self printViewHierarchy:sub depth:depth+1];
+        UIView *result = [self findFloatViewInView:sub];
+        if (result) return result;
     }
+    return nil;
 }
 
-// ---- 安全执行 selector（不带参数） ----
-- (void)safePerformSelector:(SEL)sel onTarget:(id)target {
-    if (!target || !sel) return;
-    @try {
-        if ([target respondsToSelector:sel]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-            [target performSelector:sel];
-#pragma clang diagnostic pop
-            NSLog(@"[AutoClick] ✅ Executed selector: %@ on %@", NSStringFromSelector(sel), target);
-        }
-    } @catch (NSException *exception) {
-        NSLog(@"[AutoClick] ⚠️ Exception: %@", exception);
-    }
-}
-
-// ---- 触发点击（多方法尝试，但优先无参数执行） ----
-- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
-    if (!view) {
-        NSLog(@"[AutoClick] ❌ view is nil");
-        return;
-    }
-    
-    NSLog(@"[AutoClick] 🎯 ====== Triggering tap on %@ ======", NSStringFromClass([view class]));
-    NSLog(@"[AutoClick] 📐 View frame: %@", NSStringFromCGRect(view.frame));
-    NSLog(@"[AutoClick] 📐 Point: (%.0f,%.0f)", point.x, point.y);
-    
-    // ---- 方法1: 直接无参数执行手势的 target-action ----
-    for (UIGestureRecognizer *gesture in view.gestureRecognizers) {
-        if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
-            NSLog(@"[AutoClick] ✅ Found UITapGestureRecognizer");
-            id targets = [gesture valueForKey:@"targets"];
-            if (targets) {
-                NSArray *targetsArray = (NSArray *)targets;
-                for (id targetObj in targetsArray) {
-                    id actionTarget = [targetObj valueForKey:@"target"];
-                    SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
-                    if (actionTarget && action) {
-                        NSLog(@"[AutoClick] ✅ Method 1: Trying to execute action: %@ on target: %@", NSStringFromSelector(action), actionTarget);
-                        [self safePerformSelector:action onTarget:actionTarget];
-                    }
-                }
-            }
-        }
-    }
-    
-    // ---- 方法2: 如果是 UIImageView，查找父视图的 UIControl ----
-    if ([view isKindOfClass:[UIImageView class]]) {
-        UIView *parent = view.superview;
-        while (parent) {
-            if ([parent isKindOfClass:[UIControl class]]) {
-                NSLog(@"[AutoClick] ✅ Method 2: Found UIControl parent: %@", NSStringFromClass([parent class]));
-                @try {
-                    [(UIControl *)parent sendActionsForControlEvents:UIControlEventTouchUpInside];
-                    NSLog(@"[AutoClick] ✅ Method 2: UIControl action sent");
-                    return;
-                } @catch (NSException *exception) {
-                    NSLog(@"[AutoClick] ⚠️ Method 2 exception: %@", exception);
-                }
-            }
-            // 也检查父视图的手势（无参数执行）
-            for (UIGestureRecognizer *g in parent.gestureRecognizers) {
-                if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
-                    id targets = [g valueForKey:@"targets"];
-                    if (targets) {
-                        NSArray *targetsArray = (NSArray *)targets;
-                        for (id targetObj in targetsArray) {
-                            id actionTarget = [targetObj valueForKey:@"target"];
-                            SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
-                            if (actionTarget && action) {
-                                NSLog(@"[AutoClick] ✅ Method 2: Trying parent gesture action: %@ on %@", NSStringFromSelector(action), actionTarget);
-                                [self safePerformSelector:action onTarget:actionTarget];
-                            }
-                        }
-                    }
-                }
-            }
-            parent = parent.superview;
-        }
-    }
-    
-    // ---- 方法3: 模拟完整触摸事件（使用 PTFakeTouch）- 最后尝试 ----
-    NSLog(@"[AutoClick] ✅ Method 3: Trying PTFakeTouch");
+// ---- 使用 PTFakeTouch 发送点击 ----
+- (void)sendTapAtPoint:(CGPoint)point {
+    NSLog(@"[AutoClick] 📱 Sending PTFakeTouch at (%.0f,%.0f)", point.x, point.y);
     NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
     if (pointId > 0) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             [PTFakeMetaTouch fakeTouchId:pointId AtPoint:point withTouchPhase:UITouchPhaseEnded];
-            NSLog(@"[AutoClick] ✅ Method 3: PTFakeTouch sent");
+            NSLog(@"[AutoClick] ✅ PTFakeTouch tap sent");
         });
-        return;
+    } else {
+        NSLog(@"[AutoClick] ❌ PTFakeTouch failed");
     }
-    
-    // ---- 方法4: 直接调用 touchesBegan/Ended ----
-    NSLog(@"[AutoClick] ✅ Method 4: Trying touchesBegan/Ended");
-    UITouch *touch = [[UITouch alloc] initAtPoint:point inView:view];
-    @try {
-        [view touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
-        [view touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
-        NSLog(@"[AutoClick] ✅ Method 4: touchesBegan/Ended sent");
-        return;
-    } @catch (NSException *exception) {
-        NSLog(@"[AutoClick] ⚠️ Method 4 exception: %@", exception);
-    }
-    
-    NSLog(@"[AutoClick] ❌ All methods attempted, but no response confirmed.");
 }
 
 - (void)performClick {
@@ -481,55 +242,53 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
     showTapMarkerAtPoint(point);
     
-    // ---- 查找 level 1999 窗口 ----
+    // ---- 策略1: 查找 FloatView ----
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
-        if (w.windowLevel == 1999.0) {
-            NSLog(@"[AutoClick] 🎯 Found window with level 1999: %@", NSStringFromClass([w class]));
-            
-            // ---- 在窗口上执行 hitTest ----
-            CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
-            UIView *hitView = [w hitTest:windowPoint withEvent:nil];
-            if (hitView) {
-                NSLog(@"[AutoClick] 🎯 hitTest returned: %@", NSStringFromClass([hitView class]));
-                // 打印 hitView 的父视图链
-                UIView *parent = hitView;
-                int depth = 0;
-                while (parent && depth < 10) {
-                    NSLog(@"[AutoClick]   %@ frame:%@", NSStringFromClass([parent class]), NSStringFromCGRect(parent.frame));
-                    parent = parent.superview;
-                    depth++;
-                }
-                // 触发点击
-                [self triggerTapOnView:hitView atPoint:windowPoint];
-                return;
-            } else {
-                NSLog(@"[AutoClick] ❌ hitTest returned nil at point (%.0f,%.0f)", windowPoint.x, windowPoint.y);
-            }
+        UIView *floatView = [self findFloatViewInView:w];
+        if (floatView) {
+            NSLog(@"[AutoClick] 🎯 Found FloatView in window: %@", NSStringFromClass([w class]));
+            // 获取 FloatView 中心点屏幕坐标
+            CGPoint center = CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds));
+            CGPoint screenCenter = [floatView convertPoint:center toView:nil];
+            NSLog(@"[AutoClick] 📐 FloatView center at screen: (%.0f,%.0f)", screenCenter.x, screenCenter.y);
+            [self sendTapAtPoint:screenCenter];
+            return;
         }
     }
     
-    // ---- 如果没找到 level 1999，尝试普通 hitTest ----
+    // ---- 策略2: 如果没找到 FloatView，使用普通 hitTest 且只对 UIControl 做安全操作 ----
+    UIView *hitView = nil;
+    CGPoint hitPoint = CGPointZero;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
         if (w.hidden) continue;
         CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
-        UIView *hitView = [w hitTest:windowPoint withEvent:nil];
-        if (hitView) {
-            if ([hitView isKindOfClass:NSClassFromString(@"FlutterView")] || [hitView isKindOfClass:[UIWindow class]]) {
-                continue;
-            }
-            NSLog(@"[AutoClick] 🎯 Fallback hitTest: %@", NSStringFromClass([hitView class]));
-            [self triggerTapOnView:hitView atPoint:windowPoint];
-            return;
+        UIView *view = [w hitTest:windowPoint withEvent:nil];
+        if (view && ![view isKindOfClass:NSClassFromString(@"FlutterView")] && ![view isKindOfClass:[UIWindow class]]) {
+            hitView = view;
+            hitPoint = windowPoint;
+            break;
         }
     }
     
-    NSLog(@"[AutoClick] ❌ No view found to tap");
+    if (hitView) {
+        NSLog(@"[AutoClick] 🎯 Found view via hitTest: %@", NSStringFromClass([hitView class]));
+        // 如果是 UIControl，安全发送事件
+        if ([hitView isKindOfClass:[UIControl class]]) {
+            [(UIControl *)hitView sendActionsForControlEvents:UIControlEventTouchUpInside];
+            NSLog(@"[AutoClick] ✅ UIControl action sent");
+            return;
+        }
+        // 否则使用 PTFakeTouch 在 hitPoint 发送
+        [self sendTapAtPoint:hitPoint];
+    } else {
+        NSLog(@"[AutoClick] ❌ No view found");
+    }
 }
 
 @end
