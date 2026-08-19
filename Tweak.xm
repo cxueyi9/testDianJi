@@ -12,7 +12,7 @@
 @class AutoClickFloatingWindow;
 
 // ============================================
-// 辅助函数：获取当前 key window（备用）
+// 辅助函数
 // ============================================
 static UIWindow* GetKeyWindow(void) {
     UIWindow *window = nil;
@@ -421,21 +421,27 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSString *className = NSStringFromClass([hitView class]);
     NSLog(@"[AutoClick] 🎯 Target view: %@ in window: %@", className, NSStringFromClass([window class]));
     
-    // ---- FloatView 专用处理 ----
-    if ([className isEqualToString:@"FloatView"]) {
-        [self simulateTapOnFloatView:hitView atPoint:point];
+    // ---- 如果是 UIButton（最可靠的点击方式） ----
+    if ([hitView isKindOfClass:[UIButton class]]) {
+        [(UIButton *)hitView sendActionsForControlEvents:UIControlEventTouchUpInside];
+        NSLog(@"[AutoClick] ✅ UIButton action sent");
         return;
     }
     
-    // ---- 如果是 UIImageView ----
+    // ---- 如果是 UIImageView（可能是图标） ----
     if ([hitView isKindOfClass:[UIImageView class]]) {
+        // 尝试获取父视图中的 UIButton
+        UIView *parent = hitView.superview;
+        while (parent) {
+            if ([parent isKindOfClass:[UIButton class]]) {
+                [(UIButton *)parent sendActionsForControlEvents:UIControlEventTouchUpInside];
+                NSLog(@"[AutoClick] ✅ Found UIButton in parent, action sent");
+                return;
+            }
+            parent = parent.superview;
+        }
+        // 如果父视图没有 UIButton，尝试手势识别器
         [self simulateTapOnImageView:hitView];
-        return;
-    }
-    
-    // ---- 如果是 FlutterView ----
-    if ([hitView isKindOfClass:NSClassFromString(@"FlutterView")]) {
-        [self simulateFlutterTouchAtPoint:point onView:hitView];
         return;
     }
     
@@ -443,6 +449,18 @@ static void showTapMarkerAtPoint(CGPoint point) {
     if ([hitView isKindOfClass:[UIControl class]]) {
         [(UIControl *)hitView sendActionsForControlEvents:UIControlEventTouchUpInside];
         NSLog(@"[AutoClick] ✅ UIControl action sent");
+        return;
+    }
+    
+    // ---- 如果视图名为 "FloatView" ----
+    if ([className isEqualToString:@"FloatView"]) {
+        [self simulateTapOnFloatView:hitView atPoint:point];
+        return;
+    }
+    
+    // ---- 如果是 FlutterView ----
+    if ([hitView isKindOfClass:NSClassFromString(@"FlutterView")]) {
+        [self simulateFlutterTouchAtPoint:point onView:hitView];
         return;
     }
     
@@ -457,7 +475,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
 - (void)simulateTapOnFloatView:(UIView *)floatView atPoint:(CGPoint)point {
     NSLog(@"[AutoClick] 🎯 Triggering FloatView at point (%.0f,%.0f)", point.x, point.y);
     
-    // 方法1：遍历手势识别器
     for (UIGestureRecognizer *gesture in floatView.gestureRecognizers) {
         if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
             NSLog(@"[AutoClick] ✅ Found UITapGestureRecognizer, triggering...");
@@ -480,14 +497,12 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 方法2：尝试 UIControl
     if ([floatView isKindOfClass:[UIControl class]]) {
         [(UIControl *)floatView sendActionsForControlEvents:UIControlEventTouchUpInside];
         NSLog(@"[AutoClick] ✅ UIControl action sent");
         return;
     }
     
-    // 方法3：直接调用 touchesBegan/Ended
     UITouch *touch = [[UITouch alloc] initAtPoint:point inView:floatView];
     [floatView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
     [floatView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
