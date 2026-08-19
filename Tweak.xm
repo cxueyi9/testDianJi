@@ -395,10 +395,10 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
 }
 
-// ---- 触发点击 ----
+// ---- 触发点击（唯一定义） ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
     if (!view) return;
-    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@", NSStringFromClass([view class]));
+    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
     
     // 先尝试无参数执行手势
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
@@ -450,14 +450,11 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 如果都没有，使用 PTFakeTouch（确保坐标是屏幕坐标）
-    CGPoint screenPoint = point;
-    if (![view isKindOfClass:[UIWindow class]]) {
-        screenPoint = [view convertPoint:point toView:nil];
-    }
-    [self sendTapAtPoint:screenPoint];
+    // 如果都没有，使用 PTFakeTouch（点已经是屏幕坐标）
+    [self sendTapAtPoint:point];
 }
 
+// ---- 执行点击 ----
 - (void)performClick {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
@@ -518,64 +515,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     
     // 直接使用屏幕中心点触发
     [self triggerTapOnView:targetView atPoint:screenCenter];
-}
-
-- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
-    if (!view) return;
-    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
-    
-    // 先尝试无参数执行手势
-    for (UIGestureRecognizer *g in view.gestureRecognizers) {
-        if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
-            id targets = [g valueForKey:@"targets"];
-            if (targets) {
-                NSArray *targetsArray = (NSArray *)targets;
-                for (id targetObj in targetsArray) {
-                    id actionTarget = [targetObj valueForKey:@"target"];
-                    SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
-                    if (actionTarget && action) {
-                        @try {
-                            if ([actionTarget respondsToSelector:action]) {
-                                #pragma clang diagnostic push
-                                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                                [actionTarget performSelector:action];
-                                #pragma clang diagnostic pop
-                                NSLog(@"[AutoClick] ✅ Gesture action triggered (no params) on %@", actionTarget);
-                                return;
-                            }
-                        } @catch (NSException *e) {
-                            @try {
-                                if ([actionTarget respondsToSelector:action]) {
-                                    #pragma clang diagnostic push
-                                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                                    [actionTarget performSelector:action withObject:g];
-                                    #pragma clang diagnostic pop
-                                    NSLog(@"[AutoClick] ✅ Gesture action triggered (with gesture) on %@", actionTarget);
-                                    return;
-                                }
-                            } @catch (NSException *e2) {
-                                NSLog(@"[AutoClick] ❌ Exception: %@", e2);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    // 如果是 UIControl
-    if ([view isKindOfClass:[UIControl class]]) {
-        @try {
-            [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
-            NSLog(@"[AutoClick] ✅ UIControl action sent");
-            return;
-        } @catch (NSException *e) {
-            NSLog(@"[AutoClick] ⚠️ UIControl exception: %@", e);
-        }
-    }
-    
-    // 如果都没有，使用 PTFakeTouch（点已经是屏幕坐标）
-    [self sendTapAtPoint:point];
 }
 
 @end
