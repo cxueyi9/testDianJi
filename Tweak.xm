@@ -95,7 +95,7 @@ static void saveConfig(void) {
 }
 
 // ============================================
-// 标记点击位置（红色圆点）- 添加到悬浮窗上层
+// 标记点击位置（红色圆点）
 // ============================================
 static void showTapMarkerAtPoint(CGPoint point) {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -240,71 +240,64 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _selectedLabel.text = [NSString stringWithFormat:@"当前选择目标索引: %ld", (long)gSelectedIndex];
 }
 
-- (void)selectTarget {
-    // 收集候选视图（包含所有可能被点击的视图，通过 hitTest 或递归收集）
-    NSMutableArray *candidates = [NSMutableArray array];
-    NSMutableArray *descriptions = [NSMutableArray array];
-    CGRect screen = [UIScreen mainScreen].bounds;
-    
+// ---- 收集候选视图（FloatView 和 可交互的 UIView） ----
+- (void)collectCandidateViews:(NSMutableArray *)candidates {
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
         if (w.hidden) continue;
-        [self collectCandidateViews:w intoArray:candidates descriptions:descriptions screenBounds:screen];
+        [self collectViews:w intoArray:candidates];
     }
+}
+
+- (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)array {
+    if (!view || view.hidden) return;
+    NSString *className = NSStringFromClass([view class]);
+    // 只收集 FloatView 或 UIView（且大小在合理范围内）
+    if ([className isEqualToString:@"FloatView"] || [className isEqualToString:@"UIView"]) {
+        CGRect frame = view.frame;
+        CGFloat w = frame.size.width;
+        CGFloat h = frame.size.height;
+        if (w >= 20 && w <= 120 && h >= 20 && h <= 120) {
+            [array addObject:view];
+        }
+    }
+    for (UIView *sub in view.subviews) {
+        [self collectViews:sub intoArray:array];
+    }
+}
+
+- (void)selectTarget {
+    NSMutableArray *candidates = [NSMutableArray array];
+    [self collectCandidateViews:candidates];
     
     if (candidates.count == 0) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"提示" message:@"未找到任何可点击视图" preferredStyle:UIAlertControllerStyleAlert];
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"提示" message:@"未找到任何候选视图" preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
         return;
     }
     
-    // 构建选择列表
-    UIAlertController *actionSheet = [UIAlertController alertControllerWithTitle:@"选择点击目标" message:@"点击选择要模拟点击的视图" preferredStyle:UIAlertControllerStyleActionSheet];
+    NSMutableArray *titles = [NSMutableArray array];
     for (NSInteger i = 0; i < candidates.count; i++) {
         UIView *v = candidates[i];
         CGPoint center = [v convertPoint:CGPointMake(CGRectGetMidX(v.bounds), CGRectGetMidY(v.bounds)) toView:nil];
-        NSString *className = NSStringFromClass([v class]);
-        NSString *title = [NSString stringWithFormat:@"%ld: %@ (%.0f,%.0f)", (long)i, className, center.x, center.y];
+        [titles addObject:[NSString stringWithFormat:@"%ld: %@ (%.0f,%.0f)", (long)i, NSStringFromClass([v class]), center.x, center.y]];
+    }
+    
+    UIAlertController *actionSheet = [UIAlertController alertControllerWithTitle:@"选择点击目标" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSInteger i = 0; i < titles.count; i++) {
+        NSString *title = titles[i];
         [actionSheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
             gSelectedIndex = i;
             saveConfig();
             [self updateSelectedLabel];
-            NSLog(@"[AutoClick] ✅ Selected candidate index: %ld", (long)i);
+            NSLog(@"[AutoClick] ✅ Selected view index: %ld", (long)i);
         }]];
     }
     [actionSheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:actionSheet animated:YES completion:nil];
-}
-
-- (void)collectCandidateViews:(UIView *)view intoArray:(NSMutableArray *)candidates descriptions:(NSMutableArray *)descriptions screenBounds:(CGRect)screen {
-    if (!view || view.hidden) return;
-    CGRect frame = view.frame;
-    CGFloat w = frame.size.width;
-    CGFloat h = frame.size.height;
-    BOOL inScreen = CGRectIntersectsRect(frame, screen) && !CGRectIsEmpty(frame);
-    BOOL sizeOk = (w >= 20 && w <= 120 && h >= 20 && h <= 120);
-    NSString *className = NSStringFromClass([view class]);
-    // 收集类名包含 Float, Image, Button 或 UIView 的视图，且交互性检查（有手势或 UIControl）
-    BOOL isInteractive = NO;
-    for (UIGestureRecognizer *g in view.gestureRecognizers) {
-        if ([g isKindOfClass:[UITapGestureRecognizer class]]) { isInteractive = YES; break; }
-    }
-    if ([view isKindOfClass:[UIControl class]]) isInteractive = YES;
-    BOOL isRelevant = [className rangeOfString:@"Float" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                      [className rangeOfString:@"Image" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                      [className rangeOfString:@"Button" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                      [className isEqualToString:@"UIView"] ||
-                      [className isEqualToString:@"FloatView"];
-    if (inScreen && sizeOk && isRelevant && isInteractive) {
-        [candidates addObject:view];
-        [descriptions addObject:[NSString stringWithFormat:@"%@ (%.0f,%.0f)", className, frame.origin.x, frame.origin.y]];
-    }
-    for (UIView *sub in view.subviews) {
-        [self collectCandidateViews:sub intoArray:candidates descriptions:descriptions screenBounds:screen];
-    }
 }
 
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
@@ -416,9 +409,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
-- (void)collectCandidateViews:(UIView *)view intoArray:(NSMutableArray *)candidates;
-- (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration;
-- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
+- (void)triggerTapOnView:(UIView *)view;
 @end
 
 @implementation AutoClickManager {
@@ -462,72 +453,12 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 收集候选视图（与设置界面一致） ----
-- (void)collectCandidateViews:(UIView *)view intoArray:(NSMutableArray *)candidates {
-    if (!view || view.hidden) return;
-    CGRect frame = view.frame;
-    CGFloat w = frame.size.width;
-    CGFloat h = frame.size.height;
-    BOOL sizeOk = (w >= 20 && w <= 120 && h >= 20 && h <= 120);
-    NSString *className = NSStringFromClass([view class]);
-    BOOL isInteractive = NO;
-    for (UIGestureRecognizer *g in view.gestureRecognizers) {
-        if ([g isKindOfClass:[UITapGestureRecognizer class]]) { isInteractive = YES; break; }
-    }
-    if ([view isKindOfClass:[UIControl class]]) isInteractive = YES;
-    BOOL isRelevant = [className rangeOfString:@"Float" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                      [className rangeOfString:@"Image" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                      [className rangeOfString:@"Button" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                      [className isEqualToString:@"UIView"] ||
-                      [className isEqualToString:@"FloatView"];
-    if (sizeOk && isRelevant && isInteractive) {
-        [candidates addObject:view];
-    }
-    for (UIView *sub in view.subviews) {
-        [self collectCandidateViews:sub intoArray:candidates];
-    }
-}
-
-// ---- 发送触摸事件 ----
-- (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration {
-    if (!window) {
-        NSLog(@"[AutoClick] ❌ Window is nil");
-        return;
-    }
-    CGPoint windowPoint = [window convertPoint:screenPoint fromWindow:nil];
-    NSLog(@"[AutoClick] 📱 Sending touch at screen(%.0f,%.0f) -> window(%.0f,%.0f) duration %.2f", screenPoint.x, screenPoint.y, windowPoint.x, windowPoint.y, duration);
-    
-    @try {
-        UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inWindow:window];
-        if (!touch) { return; }
-        [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
-        [touch setTapCount:1];
-        
-        UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
-        [event _clearTouches];
-        [event kif_setEventWithTouches:@[touch]];
-        [event _addTouch:touch forDelayedDelivery:NO];
-        [[UIApplication sharedApplication] sendEvent:event];
-        
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
-            [event _clearTouches];
-            [event kif_setEventWithTouches:@[touch]];
-            [event _addTouch:touch forDelayedDelivery:NO];
-            [[UIApplication sharedApplication] sendEvent:event];
-            NSLog(@"[AutoClick] ✅ Touch ended");
-        });
-    } @catch (NSException *e) {
-        NSLog(@"[AutoClick] ❌ Exception in sendTapAtPoint: %@", e);
-    }
-}
-
-// ---- 触发点击（合并版本二的正确方法） ----
-- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
+// ---- 🔥 关键方法：只触发手势，不模拟触摸 ----
+- (void)triggerTapOnView:(UIView *)view {
     if (!view) return;
-    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
+    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@", NSStringFromClass([view class]));
     
-    // 先尝试手势（无参数）
+    // 先尝试无参数手势
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [g valueForKey:@"targets"];
@@ -547,6 +478,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
                                 return;
                             }
                         } @catch (NSException *e) {
+                            // 尝试带参数
                             @try {
                                 if ([actionTarget respondsToSelector:action]) {
                                     #pragma clang diagnostic push
@@ -577,18 +509,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 获取视图所在的窗口
-    UIWindow *window = view.window;
-    if (!window) {
-        NSLog(@"[AutoClick] ❌ View has no window");
-        return;
-    }
-    
-    // point 已经是屏幕坐标，直接使用
-    NSLog(@"[AutoClick] 📐 Using screen point directly: (%.0f,%.0f)", point.x, point.y);
-    
-    // 只发送短按 (0.2秒)
-    [self sendTapAtPoint:point inWindow:window withDuration:0.2];
+    // 如果都没有手势，不执行任何操作
+    NSLog(@"[AutoClick] ⚠️ No tap gesture found on %@, abort", NSStringFromClass([view class]));
 }
 
 // ---- 点击入口 ----
@@ -597,14 +519,14 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", targetPoint.x, targetPoint.y);
     showTapMarkerAtPoint(targetPoint);
     
-    // 收集候选视图
+    // 收集所有候选视图（与设置界面一致）
     NSMutableArray *candidates = [NSMutableArray array];
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
         if (w.hidden) continue;
-        [self collectCandidateViews:w intoArray:candidates];
+        [self collectViews:w intoArray:candidates];
     }
     
     if (candidates.count == 0) {
@@ -612,19 +534,31 @@ static void showTapMarkerAtPoint(CGPoint point) {
         return;
     }
     
-    // 确保索引有效
     if (gSelectedIndex >= candidates.count) {
         gSelectedIndex = 0;
         saveConfig();
     }
     
     UIView *target = candidates[gSelectedIndex];
-    CGPoint center = CGPointMake(CGRectGetMidX(target.bounds), CGRectGetMidY(target.bounds));
-    CGPoint screenCenter = [target convertPoint:center toView:nil];
-    NSLog(@"[AutoClick] 🎯 Using candidate index %ld at screen center (%.0f,%.0f)", (long)gSelectedIndex, screenCenter.x, screenCenter.y);
-    
-    // 使用正确的触发方法
-    [self triggerTapOnView:target atPoint:screenCenter];
+    NSLog(@"[AutoClick] 🎯 Using candidate index %ld: %@", (long)gSelectedIndex, NSStringFromClass([target class]));
+    [self triggerTapOnView:target];
+}
+
+// ---- 收集视图（与设置界面逻辑一致） ----
+- (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)array {
+    if (!view || view.hidden) return;
+    NSString *className = NSStringFromClass([view class]);
+    if ([className isEqualToString:@"FloatView"] || [className isEqualToString:@"UIView"]) {
+        CGRect frame = view.frame;
+        CGFloat w = frame.size.width;
+        CGFloat h = frame.size.height;
+        if (w >= 20 && w <= 120 && h >= 20 && h <= 120) {
+            [array addObject:view];
+        }
+    }
+    for (UIView *sub in view.subviews) {
+        [self collectViews:sub intoArray:array];
+    }
 }
 
 @end
