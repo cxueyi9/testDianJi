@@ -3,10 +3,6 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <objc/runtime.h>
-#import "PTFakeMetaTouch.h"
-#import "UITouch-KIFAdditions.h"
-#import "UIApplication-KIFAdditions.h"
-#import "UIEvent+KIFAdditions.h"
 
 // ============================================
 // 前向声明
@@ -325,8 +321,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
-- (UIView *)findFloatViewInView:(UIView *)view;
-- (void)sendTapToFloatView:(UIView *)floatView;
+- (void)collectFloatViews:(UIView *)view intoArray:(NSMutableArray *)array;
+- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
 @end
 
 @implementation AutoClickManager {
@@ -370,59 +366,50 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 递归查找 FloatView ----
-- (UIView *)findFloatViewInView:(UIView *)view {
+// ---- 收集所有 FloatView ----
+- (void)collectFloatViews:(UIView *)view intoArray:(NSMutableArray *)array {
     if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
-        return view;
-    }
-    for (UIView *sub in view.subviews) {
-        UIView *result = [self findFloatViewInView:sub];
-        if (result) return result;
-    }
-    return nil;
-}
-
-// ---- 只向 FloatView 发送触摸 ----
-- (void)sendTapToFloatView:(UIView *)floatView {
-    if (!floatView) return;
-    // 获取 floatView 的中心点屏幕坐标
-    CGPoint center = CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds));
-    CGPoint screenCenter = [floatView convertPoint:center toView:nil];
-    NSLog(@"[AutoClick] 📱 Sending touch to FloatView at screen (%.0f,%.0f)", screenCenter.x, screenCenter.y);
-    
-    UIWindow *window = floatView.window;
-    if (!window) {
-        NSLog(@"[AutoClick] ❌ FloatView has no window");
+        [array addObject:view];
         return;
     }
-    CGPoint windowPoint = [window convertPoint:screenCenter fromWindow:nil];
-    @try {
-        UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inWindow:window];
-        if (!touch) return;
-        // 关键：设置 view 为 floatView，确保事件只发送到它
-        [touch setView:floatView];
-        [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
-        [touch setTapCount:1];
-        if ([touch respondsToSelector:@selector(setGestureView:)]) {
-            [touch setGestureView:floatView];
-        }
-        UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
-        [event _clearTouches];
-        [event kif_setEventWithTouches:@[touch]];
-        [event _addTouch:touch forDelayedDelivery:NO];
-        [[UIApplication sharedApplication] sendEvent:event];
-        
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
-            [event _clearTouches];
-            [event kif_setEventWithTouches:@[touch]];
-            [event _addTouch:touch forDelayedDelivery:NO];
-            [[UIApplication sharedApplication] sendEvent:event];
-            NSLog(@"[AutoClick] ✅ Touch ended");
-        });
-    } @catch (NSException *e) {
-        NSLog(@"[AutoClick] ❌ Exception: %@", e);
+    for (UIView *sub in view.subviews) {
+        [self collectFloatViews:sub intoArray:array];
     }
+}
+
+// ---- 只触发手势，不模拟触摸 ----
+- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
+    if (!view) return;
+    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
+    
+    // 只尝试手势
+    for (UIGestureRecognizer *g in view.gestureRecognizers) {
+        if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
+            id targets = [g valueForKey:@"targets"];
+            if (targets) {
+                NSArray *targetsArray = (NSArray *)targets;
+                for (id targetObj in targetsArray) {
+                    id actionTarget = [targetObj valueForKey:@"target"];
+                    SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
+                    if (actionTarget && action) {
+                        @try {
+                            if ([actionTarget respondsToSelector:action]) {
+                                #pragma clang diagnostic push
+                                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                                [actionTarget performSelector:action];
+                                #pragma clang diagnostic pop
+                                NSLog(@"[AutoClick] ✅ Gesture action triggered on %@", actionTarget);
+                                return;
+                            }
+                        } @catch (NSException *e) {
+                            NSLog(@"[AutoClick] ⚠️ Exception in gesture trigger: %@", e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    NSLog(@"[AutoClick] ⚠️ No tap gesture found on %@, abort", NSStringFromClass([view class]));
 }
 
 // ---- 点击入口 ----
@@ -431,22 +418,39 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", targetPoint.x, targetPoint.y);
     showTapMarkerAtPoint(targetPoint);
     
-    // 在所有窗口中查找 FloatView
+    // 收集所有 FloatView
+    NSMutableArray *floatViews = [NSMutableArray array];
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
         if (w.hidden) continue;
-        UIView *floatView = [self findFloatViewInView:w];
-        if (floatView) {
-            NSLog(@"[AutoClick] 🎯 Found FloatView at screen center (%.0f,%.0f)", 
-                  [floatView convertPoint:CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds)) toView:nil].x,
-                  [floatView convertPoint:CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds)) toView:nil].y);
-            [self sendTapToFloatView:floatView];
-            return;
-        }
+        [self collectFloatViews:w intoArray:floatViews];
     }
-    NSLog(@"[AutoClick] ❌ No FloatView found");
+    
+    if (floatViews.count == 0) {
+        NSLog(@"[AutoClick] ❌ No FloatView found");
+        return;
+    }
+    
+    // 按距离排序，选择最近的
+    [floatViews sortUsingComparator:^NSComparisonResult(id a, id b) {
+        UIView *va = (UIView *)a;
+        UIView *vb = (UIView *)b;
+        CGPoint ca = [va convertPoint:CGPointMake(CGRectGetMidX(va.bounds), CGRectGetMidY(va.bounds)) toView:nil];
+        CGPoint cb = [vb convertPoint:CGPointMake(CGRectGetMidX(vb.bounds), CGRectGetMidY(vb.bounds)) toView:nil];
+        CGFloat da = hypot(ca.x - targetPoint.x, ca.y - targetPoint.y);
+        CGFloat db = hypot(cb.x - targetPoint.x, cb.y - targetPoint.y);
+        if (da < db) return NSOrderedAscending;
+        if (da > db) return NSOrderedDescending;
+        return NSOrderedSame;
+    }];
+    
+    UIView *closest = floatViews[0];
+    CGPoint center = CGPointMake(CGRectGetMidX(closest.bounds), CGRectGetMidY(closest.bounds));
+    CGPoint screenCenter = [closest convertPoint:center toView:nil];
+    NSLog(@"[AutoClick] 🎯 Closest FloatView at screen center (%.0f,%.0f)", screenCenter.x, screenCenter.y);
+    [self triggerTapOnView:closest atPoint:screenCenter];
 }
 
 @end
