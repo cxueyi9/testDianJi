@@ -144,8 +144,86 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 @implementation AutoClickSettingsViewController
-// ... 与之前相同，略，请保留完整代码
-// (直接复制之前的实现)
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor whiteColor];
+    self.title = @"AutoClick 设置";
+
+    UIBarButtonItem *closeBtn = [[UIBarButtonItem alloc] initWithTitle:@"关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
+    self.navigationItem.leftBarButtonItem = closeBtn;
+
+    CGFloat margin = 20;
+    CGFloat yOffset = 100;
+    CGFloat labelWidth = 80;
+    CGFloat fieldWidth = 120;
+    CGFloat height = 40;
+
+    UILabel *xLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
+    xLabel.text = @"点击 X:";
+    [self.view addSubview:xLabel];
+
+    _xField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
+    _xField.borderStyle = UITextBorderStyleRoundedRect;
+    _xField.keyboardType = UIKeyboardTypeDecimalPad;
+    _xField.text = [NSString stringWithFormat:@"%.0f", gClickX];
+    [self.view addSubview:_xField];
+
+    yOffset += height + 20;
+    UILabel *yLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
+    yLabel.text = @"点击 Y:";
+    [self.view addSubview:yLabel];
+
+    _yField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
+    _yField.borderStyle = UITextBorderStyleRoundedRect;
+    _yField.keyboardType = UIKeyboardTypeDecimalPad;
+    _yField.text = [NSString stringWithFormat:@"%.0f", gClickY];
+    [self.view addSubview:_yField];
+
+    yOffset += height + 30;
+    UIButton *saveBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    saveBtn.frame = CGRectMake(margin, yOffset, 100, 40);
+    [saveBtn setTitle:@"保存" forState:UIControlStateNormal];
+    [saveBtn addTarget:self action:@selector(save) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:saveBtn];
+
+    yOffset += 60;
+    UILabel *floatLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, 200, height)];
+    floatLabel.text = @"悬浮窗左上角:";
+    [self.view addSubview:floatLabel];
+
+    _floatPosLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset + height + 5, 300, height)];
+    _floatPosLabel.text = [NSString stringWithFormat:@"(%.0f, %.0f)", gFloatX, gFloatY];
+    [self.view addSubview:_floatPosLabel];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    _floatPosLabel.text = [NSString stringWithFormat:@"(%.0f, %.0f)", gFloatX, gFloatY];
+}
+
+- (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
+
+- (void)save {
+    CGFloat x = [_xField.text doubleValue];
+    CGFloat y = [_yField.text doubleValue];
+    CGRect screen = [UIScreen mainScreen].bounds;
+    if (x < 0 || x > screen.size.width || y < 0 || y > screen.size.height) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"坐标无效" message:@"请输入屏幕范围内的坐标" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    gClickX = x;
+    gClickY = y;
+    saveConfig();
+    [self close];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
+}
 @end
 
 // ============================================
@@ -157,7 +235,74 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 @implementation AutoClickFloatingView
-// ... 与之前相同
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+        btn.frame = self.bounds;
+        btn.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.85];
+        btn.layer.cornerRadius = frame.size.width / 2;
+        [btn setTitle:@"▶" forState:UIControlStateNormal];
+        [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        btn.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+        [btn addTarget:self action:@selector(buttonTapped) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:btn];
+
+        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(longPress:)];
+        [self addGestureRecognizer:longPress];
+
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
+        [self addGestureRecognizer:pan];
+    }
+    return self;
+}
+
+- (void)buttonTapped {
+    if (self.target && [self.target respondsToSelector:self.action]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [self.target performSelector:self.action];
+#pragma clang diagnostic pop
+    }
+}
+
+- (void)longPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        UIViewController *topVC = [self topMostViewController];
+        if (topVC) {
+            AutoClickSettingsViewController *settingsVC = [[AutoClickSettingsViewController alloc] init];
+            UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:settingsVC];
+            [topVC presentViewController:nav animated:YES completion:nil];
+        }
+    }
+}
+
+- (void)pan:(UIPanGestureRecognizer *)gesture {
+    CGPoint translation = [gesture translationInView:self.superview];
+    CGPoint newCenter = CGPointMake(self.center.x + translation.x, self.center.y + translation.y);
+    CGRect screen = [UIScreen mainScreen].bounds;
+    CGFloat halfSize = self.frame.size.width / 2;
+    newCenter.x = MAX(halfSize, MIN(newCenter.x, screen.size.width - halfSize));
+    newCenter.y = MAX(halfSize, MIN(newCenter.y, screen.size.height - halfSize));
+    self.center = newCenter;
+    [gesture setTranslation:CGPointZero inView:self.superview];
+
+    if (gesture.state == UIGestureRecognizerStateEnded) {
+        gFloatX = self.frame.origin.x;
+        gFloatY = self.frame.origin.y;
+        saveConfig();
+    }
+}
+
+- (UIViewController *)topMostViewController {
+    UIWindow *keyWindow = GetKeyWindow();
+    UIViewController *topVC = keyWindow.rootViewController;
+    while (topVC.presentedViewController) {
+        topVC = topVC.presentedViewController;
+    }
+    return topVC;
+}
 @end
 
 // ============================================
@@ -250,7 +395,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
         UIView *floatView = [self findFloatViewInView:w];
         if (floatView) {
             NSLog(@"[AutoClick] 🎯 Found FloatView in window: %@", NSStringFromClass([w class]));
-            // 获取 FloatView 中心点屏幕坐标
             CGPoint center = CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds));
             CGPoint screenCenter = [floatView convertPoint:center toView:nil];
             NSLog(@"[AutoClick] 📐 FloatView center at screen: (%.0f,%.0f)", screenCenter.x, screenCenter.y);
@@ -278,13 +422,11 @@ static void showTapMarkerAtPoint(CGPoint point) {
     
     if (hitView) {
         NSLog(@"[AutoClick] 🎯 Found view via hitTest: %@", NSStringFromClass([hitView class]));
-        // 如果是 UIControl，安全发送事件
         if ([hitView isKindOfClass:[UIControl class]]) {
             [(UIControl *)hitView sendActionsForControlEvents:UIControlEventTouchUpInside];
             NSLog(@"[AutoClick] ✅ UIControl action sent");
             return;
         }
-        // 否则使用 PTFakeTouch 在 hitPoint 发送
         [self sendTapAtPoint:hitPoint];
     } else {
         NSLog(@"[AutoClick] ❌ No view found");
