@@ -49,13 +49,15 @@ static UIWindow* GetKeyWindow(void) {
 }
 
 // ============================================
-// 配置管理
+// 配置管理（增加偏移量）
 // ============================================
 static NSString *const kConfigFileName = @"autoclick_config.plist";
 static CGFloat gClickX = 100.0;
 static CGFloat gClickY = 100.0;
 static CGFloat gFloatX = 100.0;
 static CGFloat gFloatY = 100.0;
+static CGFloat gOffsetX = 0.0;   // 新增 X 偏移
+static CGFloat gOffsetY = -20.0; // 新增 Y 偏移（默认向上偏移20像素）
 static const CGFloat kFloatSize = 60.0;
 
 static void loadConfig(void) {
@@ -67,7 +69,9 @@ static void loadConfig(void) {
         if (config[@"clickY"]) gClickY = [config[@"clickY"] doubleValue];
         if (config[@"floatX"]) gFloatX = [config[@"floatX"] doubleValue];
         if (config[@"floatY"]) gFloatY = [config[@"floatY"] doubleValue];
-        NSLog(@"[AutoClick] 📂 Config loaded: click(%.0f,%.0f) float(%.0f,%.0f)", gClickX, gClickY, gFloatX, gFloatY);
+        if (config[@"offsetX"]) gOffsetX = [config[@"offsetX"] doubleValue];
+        if (config[@"offsetY"]) gOffsetY = [config[@"offsetY"] doubleValue];
+        NSLog(@"[AutoClick] 📂 Config loaded: click(%.0f,%.0f) offset(%.0f,%.0f) float(%.0f,%.0f)", gClickX, gClickY, gOffsetX, gOffsetY, gFloatX, gFloatY);
     } else {
         NSLog(@"[AutoClick] 📂 No config, using defaults");
     }
@@ -81,7 +85,9 @@ static void saveConfig(void) {
         @"clickX": @(gClickX),
         @"clickY": @(gClickY),
         @"floatX": @(gFloatX),
-        @"floatY": @(gFloatY)
+        @"floatY": @(gFloatY),
+        @"offsetX": @(gOffsetX),
+        @"offsetY": @(gOffsetY)
     };
     NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
     NSString *configPath = [docPath stringByAppendingPathComponent:kConfigFileName];
@@ -135,11 +141,13 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 // ============================================
-// 设置页面 ViewController
+// 设置页面 ViewController（增加偏移输入）
 // ============================================
 @interface AutoClickSettingsViewController : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *xField;
 @property (nonatomic, strong) UITextField *yField;
+@property (nonatomic, strong) UITextField *offsetXField;
+@property (nonatomic, strong) UITextField *offsetYField;
 @property (nonatomic, strong) UILabel *floatPosLabel;
 @end
 
@@ -156,42 +164,69 @@ static void showTapMarkerAtPoint(CGPoint point) {
     CGFloat margin = 20;
     CGFloat yOffset = 100;
     CGFloat labelWidth = 80;
-    CGFloat fieldWidth = 120;
+    CGFloat fieldWidth = 100;
     CGFloat height = 40;
 
+    // 点击 X
     UILabel *xLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
     xLabel.text = @"点击 X:";
     [self.view addSubview:xLabel];
-
     _xField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
     _xField.borderStyle = UITextBorderStyleRoundedRect;
     _xField.keyboardType = UIKeyboardTypeDecimalPad;
     _xField.text = [NSString stringWithFormat:@"%.0f", gClickX];
+    _xField.delegate = self;
     [self.view addSubview:_xField];
 
-    yOffset += height + 20;
+    // 点击 Y
+    yOffset += height + 10;
     UILabel *yLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
     yLabel.text = @"点击 Y:";
     [self.view addSubview:yLabel];
-
     _yField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
     _yField.borderStyle = UITextBorderStyleRoundedRect;
     _yField.keyboardType = UIKeyboardTypeDecimalPad;
     _yField.text = [NSString stringWithFormat:@"%.0f", gClickY];
+    _yField.delegate = self;
     [self.view addSubview:_yField];
 
-    yOffset += height + 30;
+    // 偏移 X
+    yOffset += height + 10;
+    UILabel *offsetXLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
+    offsetXLabel.text = @"偏移 X:";
+    [self.view addSubview:offsetXLabel];
+    _offsetXField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
+    _offsetXField.borderStyle = UITextBorderStyleRoundedRect;
+    _offsetXField.keyboardType = UIKeyboardTypeDecimalPad;
+    _offsetXField.text = [NSString stringWithFormat:@"%.0f", gOffsetX];
+    _offsetXField.delegate = self;
+    [self.view addSubview:_offsetXField];
+
+    // 偏移 Y
+    yOffset += height + 10;
+    UILabel *offsetYLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
+    offsetYLabel.text = @"偏移 Y:";
+    [self.view addSubview:offsetYLabel];
+    _offsetYField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
+    _offsetYField.borderStyle = UITextBorderStyleRoundedRect;
+    _offsetYField.keyboardType = UIKeyboardTypeDecimalPad;
+    _offsetYField.text = [NSString stringWithFormat:@"%.0f", gOffsetY];
+    _offsetYField.delegate = self;
+    [self.view addSubview:_offsetYField];
+
+    // 保存按钮
+    yOffset += height + 20;
     UIButton *saveBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     saveBtn.frame = CGRectMake(margin, yOffset, 100, 40);
     [saveBtn setTitle:@"保存" forState:UIControlStateNormal];
     [saveBtn addTarget:self action:@selector(save) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:saveBtn];
 
+    // 悬浮窗位置
     yOffset += 60;
     UILabel *floatLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, 200, height)];
     floatLabel.text = @"悬浮窗左上角:";
     [self.view addSubview:floatLabel];
-
     _floatPosLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset + height + 5, 300, height)];
     _floatPosLabel.text = [NSString stringWithFormat:@"(%.0f, %.0f)", gFloatX, gFloatY];
     [self.view addSubview:_floatPosLabel];
@@ -207,6 +242,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
 - (void)save {
     CGFloat x = [_xField.text doubleValue];
     CGFloat y = [_yField.text doubleValue];
+    CGFloat ox = [_offsetXField.text doubleValue];
+    CGFloat oy = [_offsetYField.text doubleValue];
     CGRect screen = [UIScreen mainScreen].bounds;
     if (x < 0 || x > screen.size.width || y < 0 || y > screen.size.height) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"坐标无效" message:@"请输入屏幕范围内的坐标" preferredStyle:UIAlertControllerStyleAlert];
@@ -216,6 +253,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
     gClickX = x;
     gClickY = y;
+    gOffsetX = ox;
+    gOffsetY = oy;
     saveConfig();
     [self close];
 }
@@ -287,7 +326,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
     newCenter.y = MAX(halfSize, MIN(newCenter.y, screen.size.height - halfSize));
     self.center = newCenter;
     [gesture setTranslation:CGPointZero inView:self.superview];
-performClickrStateEnded) {
+
+    if (gesture.state == UIGestureRecognizerStateEnded) {
         gFloatX = self.frame.origin.x;
         gFloatY = self.frame.origin.y;
         saveConfig();
@@ -369,12 +409,14 @@ performClickrStateEnded) {
 
 // ---- 使用 PTFakeTouch 发送点击 ----
 - (void)sendTapAtPoint:(CGPoint)point {
-    NSLog(@"[AutoClick] 📱 Sending PTFakeTouch at (%.0f,%.0f)", point.x, point.y);
-    NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
+    // 应用偏移
+    CGPoint adjustedPoint = CGPointMake(point.x + gOffsetX, point.y + gOffsetY);
+    NSLog(@"[AutoClick] 📱 Sending PTFakeTouch at original(%.0f,%.0f) adjusted(%.0f,%.0f)", point.x, point.y, adjustedPoint.x, adjustedPoint.y);
+    NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:adjustedPoint withTouchPhase:UITouchPhaseBegan];
     if (pointId > 0) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            [PTFakeMetaTouch fakeTouchId:pointId AtPoint:point withTouchPhase:UITouchPhaseEnded];
-            NSLog(@"[AutoClick] ✅ PTFakeTouch tap sent");
+            [PTFakeMetaTouch fakeTouchId:pointId AtPoint:adjustedPoint withTouchPhase:UITouchPhaseEnded];
+            NSLog(@"[AutoClick] ✅ PTFakeTouch tap sent at adjusted point");
         });
     } else {
         NSLog(@"[AutoClick] ❌ PTFakeTouch failed");
@@ -384,7 +426,7 @@ performClickrStateEnded) {
 - (void)performClick {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
-    showTapMarkerAtPoint(point);
+    showTapMarkerAtPoint(point); // 红色标记在原始坐标，便于观察偏移效果
     
     // ---- 策略1: 查找 FloatView ----
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
@@ -402,7 +444,7 @@ performClickrStateEnded) {
         }
     }
     
-    // ---- 策略2: hitTest 查找点击点下的视图 ----
+    // ---- 策略2: hitTest ----
     UIView *hitView = nil;
     CGPoint hitPoint = CGPointZero;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
@@ -419,52 +461,18 @@ performClickrStateEnded) {
         }
     }
     
-    if (!hitView) {
-        NSLog(@"[AutoClick] ❌ No view found");
-        return;
-    }
-    
-    NSLog(@"[AutoClick] 🎯 Found view via hitTest: %@", NSStringFromClass([hitView class]));
-    // 打印视图层级
-    UIView *parent = hitView;
-    int depth = 0;
-    while (parent && depth < 10) {
-        NSLog(@"[AutoClick]   %@ frame:%@", NSStringFromClass([parent class]), NSStringFromCGRect(parent.frame));
-        parent = parent.superview;
-        depth++;
-    }
-    
-    // ---- 查找可点击的父视图 ----
-    UIView *targetView = hitView;
-    // 如果当前是 UIImageView，向上查找
-    if ([hitView isKindOfClass:[UIImageView class]]) {
-        UIView *superview = hitView.superview;
-        while (superview) {
-            // 如果父视图是 FloatView 或 UIControl 或带有手势
-            if ([NSStringFromClass([superview class]) isEqualToString:@"FloatView"] ||
-                [superview isKindOfClass:[UIControl class]] ||
-                superview.gestureRecognizers.count > 0) {
-                targetView = superview;
-                NSLog(@"[AutoClick] 🎯 Using parent view: %@ as target", NSStringFromClass([targetView class]));
-                break;
-            }
-            superview = superview.superview;
+    if (hitView) {
+        NSLog(@"[AutoClick] 🎯 Found view via hitTest: %@", NSStringFromClass([hitView class]));
+        if ([hitView isKindOfClass:[UIControl class]]) {
+            [(UIControl *)hitView sendActionsForControlEvents:UIControlEventTouchUpInside];
+            NSLog(@"[AutoClick] ✅ UIControl action sent");
+            return;
         }
+        // 使用 hitTest 得到的坐标，并应用偏移
+        [self sendTapAtPoint:hitPoint];
+    } else {
+        NSLog(@"[AutoClick] ❌ No view found");
     }
-    
-    // ---- 对目标视图发送点击 ----
-    // 如果是 UIControl
-    if ([targetView isKindOfClass:[UIControl class]]) {
-        [(UIControl *)targetView sendActionsForControlEvents:UIControlEventTouchUpInside];
-        NSLog(@"[AutoClick] ✅ UIControl action sent");
-        return;
-    }
-    
-    // 否则发送 PTFakeTouch 到目标视图的中心点（屏幕坐标）
-    CGPoint centerInTarget = CGPointMake(CGRectGetMidX(targetView.bounds), CGRectGetMidY(targetView.bounds));
-    CGPoint screenCenter = [targetView convertPoint:centerInTarget toView:nil];
-    NSLog(@"[AutoClick] 📱 Sending PTFakeTouch to %@ at (%.0f,%.0f)", NSStringFromClass([targetView class]), screenCenter.x, screenCenter.y);
-    [self sendTapAtPoint:screenCenter];
 }
 
 @end
