@@ -314,6 +314,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 - (void)simulateTapOnFloatView:(UIView *)floatView atPoint:(CGPoint)point;
 - (void)simulateTapOnImageView:(UIView *)imageView;
 - (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView;
+- (void)printAllSubviews:(UIView *)view depth:(int)depth;
 @end
 
 @implementation AutoClickManager {
@@ -357,6 +358,16 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
+- (void)printAllSubviews:(UIView *)view depth:(int)depth {
+    if (!view) return;
+    NSMutableString *indent = [NSMutableString string];
+    for (int i = 0; i < depth; i++) [indent appendString:@"  "];
+    NSLog(@"[AutoClick] %@%@ frame:%@", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame));
+    for (UIView *sub in view.subviews) {
+        [self printAllSubviews:sub depth:depth+1];
+    }
+}
+
 - (void)performClick {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
@@ -367,16 +378,32 @@ static void showTapMarkerAtPoint(CGPoint point) {
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"FloatWindow"]) {
             NSLog(@"[AutoClick] 🎯 Found FloatWindow");
-            // 确保交互启用
+            // 打印整个窗口的视图层级
+            [self printAllSubviews:w depth:0];
+            
+            // 启用交互
             w.userInteractionEnabled = YES;
-            for (UIView *sub in w.subviews) {
-                sub.userInteractionEnabled = YES;
-                if ([NSStringFromClass([sub class]) isEqualToString:@"FloatView"]) {
-                    CGPoint centerInSub = CGPointMake(CGRectGetMidX(sub.bounds), CGRectGetMidY(sub.bounds));
-                    CGPoint screenCenter = [sub convertPoint:centerInSub toView:nil];
-                    NSLog(@"[AutoClick] 🎯 Found FloatView at screen center: (%.0f, %.0f)", screenCenter.x, screenCenter.y);
-                    // 直接模拟点击 FloatView
-                    [self simulateTapOnFloatView:sub atPoint:screenCenter];
+            // 使用 hitTest 在 FloatWindow 的坐标系统中查找点击点
+            CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
+            UIView *hitView = [w hitTest:windowPoint withEvent:nil];
+            if (hitView) {
+                NSLog(@"[AutoClick] 🎯 FloatWindow hitTest returned: %@", NSStringFromClass([hitView class]));
+                // 如果是 FloatView 或任何可点击视图
+                [self simulateTapOnFloatView:hitView atPoint:windowPoint];
+                return;
+            } else {
+                // 如果 hitTest 返回 nil，尝试手动遍历找到 FloatView
+                UIView *foundFloatView = nil;
+                for (UIView *sub in w.subviews) {
+                    if ([NSStringFromClass([sub class]) isEqualToString:@"FloatView"]) {
+                        foundFloatView = sub;
+                        break;
+                    }
+                }
+                if (foundFloatView) {
+                    CGPoint centerInSub = CGPointMake(CGRectGetMidX(foundFloatView.bounds), CGRectGetMidY(foundFloatView.bounds));
+                    CGPoint screenCenter = [foundFloatView convertPoint:centerInSub toView:nil];
+                    [self simulateTapOnFloatView:foundFloatView atPoint:screenCenter];
                     return;
                 }
             }
