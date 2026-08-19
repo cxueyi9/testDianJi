@@ -378,7 +378,23 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
 }
 
-// ---- 触发点击（多方法尝试） ----
+// ---- 安全执行 selector（不带参数） ----
+- (void)safePerformSelector:(SEL)sel onTarget:(id)target {
+    if (!target || !sel) return;
+    @try {
+        if ([target respondsToSelector:sel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [target performSelector:sel];
+#pragma clang diagnostic pop
+            NSLog(@"[AutoClick] ✅ Executed selector: %@ on %@", NSStringFromSelector(sel), target);
+        }
+    } @catch (NSException *exception) {
+        NSLog(@"[AutoClick] ⚠️ Exception: %@", exception);
+    }
+}
+
+// ---- 触发点击（多方法尝试，但优先无参数执行） ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
     if (!view) {
         NSLog(@"[AutoClick] ❌ view is nil");
@@ -389,19 +405,10 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 📐 View frame: %@", NSStringFromCGRect(view.frame));
     NSLog(@"[AutoClick] 📐 Point: (%.0f,%.0f)", point.x, point.y);
     
-    // ---- 打印所有手势识别器 ----
-    NSLog(@"[AutoClick] 🖐 Gesture recognizers on view:");
-    for (UIGestureRecognizer *gesture in view.gestureRecognizers) {
-        NSLog(@"[AutoClick]   - %@", NSStringFromClass([gesture class]));
-        if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
-            NSLog(@"[AutoClick]     -> UITapGestureRecognizer found!");
-        }
-    }
-    
-    // ---- 方法1: 直接触发 UITapGestureRecognizer ----
+    // ---- 方法1: 直接无参数执行手势的 target-action ----
     for (UIGestureRecognizer *gesture in view.gestureRecognizers) {
         if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
-            NSLog(@"[AutoClick] ✅ Method 1: Triggering UITapGestureRecognizer directly");
+            NSLog(@"[AutoClick] ✅ Found UITapGestureRecognizer");
             id targets = [gesture valueForKey:@"targets"];
             if (targets) {
                 NSArray *targetsArray = (NSArray *)targets;
@@ -409,22 +416,14 @@ static void showTapMarkerAtPoint(CGPoint point) {
                     id actionTarget = [targetObj valueForKey:@"target"];
                     SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
                     if (actionTarget && action) {
-                        @try {
-                            // 使用 performSelector
-                            if ([actionTarget respondsToSelector:action]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                                [actionTarget performSelector:action withObject:gesture];
-#pragma clang diagnostic pop
-                                NSLog(@"[AutoClick] ✅ Method 1: Action triggered on %@", actionTarget);
-                                return;
-                            }
-                        } @catch (NSException *exception) {
-                            NSLog(@"[AutoClick] ⚠️ Method 1 exception: %@", exception);
-                        }
+                        NSLog(@"[AutoClick] ✅ Method 1: Trying to execute action: %@ on target: %@", NSStringFromSelector(action), actionTarget);
+                        // 不带参数执行
+                        [self safePerformSelector:action onTarget:actionTarget];
+                        // 即使执行了，也继续尝试其他方法，以防该方法无效
                     }
                 }
             }
+            // 不立即返回，继续尝试其他方法
         }
     }
     
@@ -442,7 +441,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
                     NSLog(@"[AutoClick] ⚠️ Method 2 exception: %@", exception);
                 }
             }
-            // 也检查父视图的手势
+            // 也检查父视图的手势（无参数执行）
             for (UIGestureRecognizer *g in parent.gestureRecognizers) {
                 if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
                     id targets = [g valueForKey:@"targets"];
@@ -452,18 +451,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
                             id actionTarget = [targetObj valueForKey:@"target"];
                             SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
                             if (actionTarget && action) {
-                                @try {
-                                    if ([actionTarget respondsToSelector:action]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                                        [actionTarget performSelector:action withObject:g];
-#pragma clang diagnostic pop
-                                        NSLog(@"[AutoClick] ✅ Method 2: Parent gesture triggered");
-                                        return;
-                                    }
-                                } @catch (NSException *exception) {
-                                    NSLog(@"[AutoClick] ⚠️ Method 2 exception: %@", exception);
-                                }
+                                NSLog(@"[AutoClick] ✅ Method 2: Trying parent gesture action: %@ on %@", NSStringFromSelector(action), actionTarget);
+                                [self safePerformSelector:action onTarget:actionTarget];
                             }
                         }
                     }
@@ -473,7 +462,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // ---- 方法3: 模拟完整触摸事件（使用 PTFakeTouch） ----
+    // ---- 方法3: 模拟完整触摸事件（使用 PTFakeTouch）- 最后尝试 ----
     NSLog(@"[AutoClick] ✅ Method 3: Trying PTFakeTouch");
     NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
     if (pointId > 0) {
@@ -496,7 +485,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
         NSLog(@"[AutoClick] ⚠️ Method 4 exception: %@", exception);
     }
     
-    NSLog(@"[AutoClick] ❌ All methods failed");
+    NSLog(@"[AutoClick] ❌ All methods attempted, but no response confirmed.");
 }
 
 - (void)performClick {
