@@ -383,7 +383,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 
 // ---- 使用 PTFakeTouch 发送点击 ----
 - (void)sendTapAtPoint:(CGPoint)point {
-    NSLog(@"[AutoClick] 📱 Sending PTFakeTouch at (%.0f,%.0f)", point.x, point.y);
+    NSLog(@"[AutoClick] 📱 Sending PTFakeTouch at screen (%.0f,%.0f)", point.x, point.y);
     NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
     if (pointId > 0) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
@@ -395,12 +395,12 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
 }
 
-// ---- 只执行手势的 target-action，不模拟触摸 ----
+// ---- 触发点击 ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
     if (!view) return;
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@", NSStringFromClass([view class]));
     
-    // 先尝试无参数执行
+    // 先尝试无参数执行手势
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [g valueForKey:@"targets"];
@@ -441,13 +441,20 @@ static void showTapMarkerAtPoint(CGPoint point) {
     
     // 如果是 UIControl
     if ([view isKindOfClass:[UIControl class]]) {
-        [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
-        NSLog(@"[AutoClick] ✅ UIControl action sent");
-        return;
+        @try {
+            [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
+            NSLog(@"[AutoClick] ✅ UIControl action sent");
+            return;
+        } @catch (NSException *e) {
+            NSLog(@"[AutoClick] ⚠️ UIControl exception: %@", e);
+        }
     }
     
-    // 如果都没有，使用 PTFakeTouch
-    CGPoint screenPoint = [view convertPoint:point toView:nil];
+    // 如果都没有，使用 PTFakeTouch（确保坐标是屏幕坐标）
+    CGPoint screenPoint = point;
+    if (![view isKindOfClass:[UIWindow class]]) {
+        screenPoint = [view convertPoint:point toView:nil];
+    }
     [self sendTapAtPoint:screenPoint];
 }
 
@@ -474,6 +481,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     // 策略2: hitTest
     UIView *hitView = nil;
     CGPoint hitPoint = CGPointZero;
+    UIWindow *hitWindow = nil;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
@@ -484,6 +492,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
         if (view && ![view isKindOfClass:NSClassFromString(@"FlutterView")] && ![view isKindOfClass:[UIWindow class]]) {
             hitView = view;
             hitPoint = windowPoint;
+            hitWindow = w;
             break;
         }
     }
@@ -495,16 +504,16 @@ static void showTapMarkerAtPoint(CGPoint point) {
     
     NSLog(@"[AutoClick] 🎯 hitTest found: %@", NSStringFromClass([hitView class]));
     
-    // ---- 核心修改：如果是 UILabel，使用其父视图 ----
+    // ---- 如果是 UIImageView 或 UILabel，使用其父视图 ----
     UIView *targetView = hitView;
-    if ([hitView isKindOfClass:[UILabel class]]) {
+    if ([hitView isKindOfClass:[UIImageView class]] || [hitView isKindOfClass:[UILabel class]]) {
         if (hitView.superview) {
             targetView = hitView.superview;
-            NSLog(@"[AutoClick] 🔄 UILabel detected, using superview: %@", NSStringFromClass([targetView class]));
+            NSLog(@"[AutoClick] 🔄 %@ detected, using superview: %@", NSStringFromClass([hitView class]), NSStringFromClass([targetView class]));
         }
     }
     
-    // 向上查找可点击父视图（最多5层）
+    // 从 targetView 向上查找可点击父视图（最多5层）
     UIView *current = targetView;
     int depth = 0;
     while (current && depth < 5) {
@@ -517,18 +526,21 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
         if (hasTap || [current isKindOfClass:[UIControl class]]) {
             NSLog(@"[AutoClick] 🎯 Found responsive parent: %@", NSStringFromClass([current class]));
-            CGPoint converted = [current convertPoint:hitPoint fromView:hitView.superview];
-            [self triggerTapOnView:current atPoint:converted];
+            CGPoint convertedPoint = [current convertPoint:hitPoint fromView:hitView.superview];
+            [self triggerTapOnView:current atPoint:convertedPoint];
             return;
         }
         current = current.superview;
         depth++;
     }
     
-    // 如果没找到，直接使用 targetView
-    NSLog(@"[AutoClick] ⚠️ No responsive parent, using targetView: %@", NSStringFromClass([targetView class]));
-    CGPoint finalPoint = [targetView convertPoint:hitPoint fromView:hitView.superview];
-    [self triggerTapOnView:targetView atPoint:finalPoint];
+    // 如果没找到任何可点击父视图，直接使用 targetView
+    NSLog(@"[AutoClick] ⚠️ No responsive parent found, using targetView: %@", NSStringFromClass([targetView class]));
+    CGPoint screenPoint = [targetView convertPoint:hitPoint fromView:hitView.superview];
+    if ([targetView isKindOfClass:[UIWindow class]]) {
+        screenPoint = hitPoint;
+    }
+    [self triggerTapOnView:targetView atPoint:screenPoint];
 }
 
 @end
