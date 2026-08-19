@@ -3,10 +3,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <objc/runtime.h>
-#import "PTFakeMetaTouch.h"
-#import "UITouch-KIFAdditions.h"
-#import "UIApplication-KIFAdditions.h"
-#import "UIEvent+KIFAdditions.h"
+#import "PTFakeMetaTouch.h"  // 只需这一个头文件
 
 // ============================================
 // 前向声明
@@ -54,8 +51,8 @@ static UIWindow* GetKeyWindow(void) {
 // 配置管理
 // ============================================
 static NSString *const kConfigFileName = @"autoclick_config.plist";
-static CGFloat gClickX = 100.0;
-static CGFloat gClickY = 100.0;
+static CGFloat gClickX = 390.0;
+static CGFloat gClickY = 420.0;
 static CGFloat gFloatX = 100.0;
 static CGFloat gFloatY = 100.0;
 static const CGFloat kFloatSize = 60.0;
@@ -325,10 +322,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
-- (UIView *)findFloatViewInView:(UIView *)view;
-- (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration;
-- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
-- (UIView *)findInteractiveViewFromView:(UIView *)view;
+- (void)sendTapAtPoint:(CGPoint)point;
 @end
 
 @implementation AutoClickManager {
@@ -372,144 +366,28 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 递归查找 FloatView ----
-- (UIView *)findFloatViewInView:(UIView *)view {
-    if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
-        return view;
-    }
-    for (UIView *sub in view.subviews) {
-        UIView *result = [self findFloatViewInView:sub];
-        if (result) return result;
-    }
-    return nil;
-}
-
-// ---- 发送触摸事件到指定窗口的屏幕坐标 ----
-- (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration {
-    if (!window) {
-        NSLog(@"[AutoClick] ❌ Window is nil");
-        return;
-    }
-    CGPoint windowPoint = [window convertPoint:screenPoint fromWindow:nil];
-    NSLog(@"[AutoClick] 📱 Sending touch at screen(%.0f,%.0f) -> window(%.0f,%.0f) duration %.2f", screenPoint.x, screenPoint.y, windowPoint.x, windowPoint.y, duration);
-    
-    UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inWindow:window];
-    if (!touch) {
-        NSLog(@"[AutoClick] ❌ Failed to create touch");
-        return;
-    }
-    [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
-    [touch setTapCount:1];
-    
-    UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
-    [event _clearTouches];
-    [event kif_setEventWithTouches:@[touch]];
-    [event _addTouch:touch forDelayedDelivery:NO];
-    [[UIApplication sharedApplication] sendEvent:event];
-    
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
-        [event _clearTouches];
-        [event kif_setEventWithTouches:@[touch]];
-        [event _addTouch:touch forDelayedDelivery:NO];
-        [[UIApplication sharedApplication] sendEvent:event];
-        NSLog(@"[AutoClick] ✅ Touch ended");
-    });
-}
-
-// ---- 🔥 查找可交互视图（有手势或 UIControl） ----
-- (UIView *)findInteractiveViewFromView:(UIView *)view {
-    if (!view) return nil;
-    UIView *current = view;
-    // 最多向上查找5层
-    for (int i = 0; i < 5 && current; i++) {
-        // 检查是否有手势
-        for (UIGestureRecognizer *g in current.gestureRecognizers) {
-            if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
-                return current;
-            }
-        }
-        // 检查是否是 UIControl
-        if ([current isKindOfClass:[UIControl class]]) {
-            return current;
-        }
-        current = current.superview;
-    }
-    // 如果没找到，返回原始视图（最后尝试）
-    return view;
-}
-
-// ---- 触发点击 ----
-- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
-    if (!view) return;
-    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
-    
-    // 先尝试手势（无参数）
-    for (UIGestureRecognizer *g in view.gestureRecognizers) {
-        if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
-            id targets = [g valueForKey:@"targets"];
-            if (targets) {
-                NSArray *targetsArray = (NSArray *)targets;
-                for (id targetObj in targetsArray) {
-                    id actionTarget = [targetObj valueForKey:@"target"];
-                    SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
-                    if (actionTarget && action) {
-                        @try {
-                            if ([actionTarget respondsToSelector:action]) {
-                                #pragma clang diagnostic push
-                                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                                [actionTarget performSelector:action];
-                                #pragma clang diagnostic pop
-                                NSLog(@"[AutoClick] ✅ Gesture action triggered (no params) on %@", actionTarget);
-                                return;
-                            }
-                        } @catch (NSException *e) {
-                            @try {
-                                if ([actionTarget respondsToSelector:action]) {
-                                    #pragma clang diagnostic push
-                                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                                    [actionTarget performSelector:action withObject:g];
-                                    #pragma clang diagnostic pop
-                                    NSLog(@"[AutoClick] ✅ Gesture action triggered (with gesture) on %@", actionTarget);
-                                    return;
-                                }
-                            } @catch (NSException *e2) {
-                                NSLog(@"[AutoClick] ❌ Exception: %@", e2);
-                            }
-                        }
-                    }
+// ---- 🔥 核心：用 PTFakeMetaTouch 在坐标发送触摸 ----
+- (void)sendTapAtPoint:(CGPoint)point {
+    NSLog(@"[AutoClick] 📱 Sending tap at (%.0f,%.0f)", point.x, point.y);
+    @try {
+        // 先发送 touch down
+        NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
+        if (pointId > 0) {
+            // 延迟 0.1 秒发送 touch up
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                @try {
+                    [PTFakeMetaTouch fakeTouchId:pointId AtPoint:point withTouchPhase:UITouchPhaseEnded];
+                    NSLog(@"[AutoClick] ✅ Tap sent successfully");
+                } @catch (NSException *e) {
+                    NSLog(@"[AutoClick] ❌ Exception in touch up: %@", e);
                 }
-            }
+            });
+        } else {
+            NSLog(@"[AutoClick] ❌ Failed to get pointId");
         }
+    } @catch (NSException *e) {
+        NSLog(@"[AutoClick] ❌ Exception in sendTapAtPoint: %@", e);
     }
-    
-    // 如果是 UIControl
-    if ([view isKindOfClass:[UIControl class]]) {
-        @try {
-            [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
-            NSLog(@"[AutoClick] ✅ UIControl action sent");
-            return;
-        } @catch (NSException *e) {
-            NSLog(@"[AutoClick] ⚠️ UIControl exception: %@", e);
-        }
-    }
-    
-    // 获取视图所在的窗口
-    UIWindow *window = view.window;
-    if (!window) {
-        NSLog(@"[AutoClick] ❌ View has no window");
-        return;
-    }
-    
-    // point 已经是屏幕坐标，直接使用
-    NSLog(@"[AutoClick] 📐 Using screen point directly: (%.0f,%.0f)", point.x, point.y);
-    
-    // 先尝试短按 (0.2秒)
-    [self sendTapAtPoint:point inWindow:window withDuration:0.2];
-    // 延迟后尝试长按 (1.0秒)
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        [self sendTapAtPoint:point inWindow:window withDuration:1.0];
-    });
 }
 
 - (void)performClick {
@@ -517,78 +395,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
     showTapMarkerAtPoint(point);
     
-    // ---- 策略1: 查找 FloatView（兼容老贝贝图标） ----
-    for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
-            continue;
-        }
-        UIView *floatView = [self findFloatViewInView:w];
-        if (floatView) {
-            // 检查是否可交互
-            UIView *interactive = [self findInteractiveViewFromView:floatView];
-            if (interactive) {
-                CGPoint center = CGPointMake(CGRectGetMidX(interactive.bounds), CGRectGetMidY(interactive.bounds));
-                CGPoint screenCenter = [interactive convertPoint:center toView:nil];
-                NSLog(@"[AutoClick] 🎯 Found interactive FloatView at screen center (%.0f,%.0f)", screenCenter.x, screenCenter.y);
-                [self triggerTapOnView:interactive atPoint:screenCenter];
-                return;
-            } else {
-                NSLog(@"[AutoClick] ⚠️ FloatView found but not interactive");
-            }
-        }
-    }
-    
-    // ---- 策略2: hitTest（获取点击点下的视图） ----
-    UIView *hitView = nil;
-    CGPoint hitPoint = CGPointZero;
-    for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
-            continue;
-        }
-        if (w.hidden) continue;
-        CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
-        UIView *view = [w hitTest:windowPoint withEvent:nil];
-        if (view && ![view isKindOfClass:NSClassFromString(@"FlutterView")] && ![view isKindOfClass:[UIWindow class]]) {
-            hitView = view;
-            hitPoint = windowPoint;
-            break;
-        }
-    }
-    
-    if (!hitView) {
-        NSLog(@"[AutoClick] ❌ No view found via hitTest");
-        return;
-    }
-    
-    NSLog(@"[AutoClick] 🎯 hitTest found: %@", NSStringFromClass([hitView class]));
-    
-    // ---- 🔥 如果 hitTest 返回 UILabel，使用其父视图 ----
-    UIView *targetView = hitView;
-    if ([hitView isKindOfClass:[UILabel class]]) {
-        if (hitView.superview) {
-            targetView = hitView.superview;
-            NSLog(@"[AutoClick] 🔄 UILabel detected, using superview: %@", NSStringFromClass([targetView class]));
-        }
-    } else if ([hitView isKindOfClass:[UIImageView class]]) {
-        if (hitView.superview) {
-            targetView = hitView.superview;
-            NSLog(@"[AutoClick] 🔄 UIImageView detected, using superview: %@", NSStringFromClass([targetView class]));
-        }
-    }
-    
-    // ---- 🔥 查找可交互视图 ----
-    UIView *interactive = [self findInteractiveViewFromView:targetView];
-    if (!interactive) {
-        NSLog(@"[AutoClick] ❌ No interactive view found in hierarchy");
-        return;
-    }
-    
-    // 计算中心点屏幕坐标
-    CGPoint center = CGPointMake(CGRectGetMidX(interactive.bounds), CGRectGetMidY(interactive.bounds));
-    CGPoint screenCenter = [interactive convertPoint:center toView:nil];
-    NSLog(@"[AutoClick] 🎯 Using interactive view %@ at screen center (%.0f,%.0f)", NSStringFromClass([interactive class]), screenCenter.x, screenCenter.y);
-    
-    [self triggerTapOnView:interactive atPoint:screenCenter];
+    // 直接发送触摸，不进行任何视图查找
+    [self sendTapAtPoint:point];
 }
 
 @end
