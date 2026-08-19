@@ -148,7 +148,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 // ============================================
-// 设置页面 ViewController
+// 设置页面 ViewController（只显示类名和坐标 x,y）
 // ============================================
 @interface AutoClickSettingsViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *xField;
@@ -171,7 +171,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     UIBarButtonItem *closeBtn = [[UIBarButtonItem alloc] initWithTitle:@"关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
     self.navigationItem.leftBarButtonItem = closeBtn;
     
-    // 收集候选视图：只添加 FloatView（老贝贝图标）
     [self collectCandidateViews];
     
     CGFloat margin = 20;
@@ -233,34 +232,54 @@ static void showTapMarkerAtPoint(CGPoint point) {
 - (void)collectCandidateViews {
     NSMutableArray *candidates = [NSMutableArray array];
     NSMutableArray *descriptions = [NSMutableArray array];
+    CGRect screen = [UIScreen mainScreen].bounds;
     
-    // 遍历所有窗口，查找类名为 FloatView 的视图
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
         if (w.hidden) continue;
-        [self findFloatViews:w intoArray:candidates descriptions:descriptions];
+        [self collectViews:w intoArray:candidates descriptions:descriptions screenBounds:screen];
     }
+    
+    // 按 frame 排序
+    [candidates sortUsingComparator:^NSComparisonResult(id a, id b) {
+        UIView *va = (UIView *)a;
+        UIView *vb = (UIView *)b;
+        CGRect ra = va.frame;
+        CGRect rb = vb.frame;
+        if (ra.origin.y < rb.origin.y) return NSOrderedAscending;
+        if (ra.origin.y > rb.origin.y) return NSOrderedDescending;
+        if (ra.origin.x < rb.origin.x) return NSOrderedAscending;
+        if (ra.origin.x > rb.origin.x) return NSOrderedDescending;
+        return NSOrderedSame;
+    }];
     
     self.candidateViews = candidates;
     self.viewDescriptions = descriptions;
     [self.tableView reloadData];
 }
 
-- (void)findFloatViews:(UIView *)view intoArray:(NSMutableArray *)candidates descriptions:(NSMutableArray *)descriptions {
-    if (!view) return;
+- (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)candidates descriptions:(NSMutableArray *)descriptions screenBounds:(CGRect)screen {
+    if (!view || view.hidden) return;
+    CGRect frame = view.frame;
+    CGFloat w = frame.size.width;
+    CGFloat h = frame.size.height;
+    BOOL inScreen = CGRectIntersectsRect(frame, screen) && !CGRectIsEmpty(frame);
+    BOOL sizeOk = (w >= 20 && w <= 120 && h >= 20 && h <= 120);
     NSString *className = NSStringFromClass([view class]);
-    if ([className isEqualToString:@"FloatView"]) {
-        CGRect frame = view.frame;
-        // 只添加坐标在屏幕范围内的 FloatView（避免负坐标）
-        if (frame.origin.x >= 0 && frame.origin.y >= 0) {
-            [candidates addObject:view];
-            [descriptions addObject:[NSString stringWithFormat:@"FloatView (%.0f,%.0f)", frame.origin.x, frame.origin.y]];
-        }
+    // 只收集类名包含 Float, Image, Button 或 自定义视图（如 FloatView）
+    BOOL isRelevant = [className rangeOfString:@"Float" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                      [className rangeOfString:@"Image" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                      [className rangeOfString:@"Button" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                      [className isEqualToString:@"UIView"]; // 也可能有自定义视图
+    if (inScreen && sizeOk && isRelevant) {
+        [candidates addObject:view];
+        // 只显示类名和坐标 (x,y)
+        [descriptions addObject:[NSString stringWithFormat:@"%@ (%.0f,%.0f)", className, frame.origin.x, frame.origin.y]];
     }
     for (UIView *sub in view.subviews) {
-        [self findFloatViews:sub intoArray:candidates descriptions:descriptions];
+        [self collectViews:sub intoArray:candidates descriptions:descriptions screenBounds:screen];
     }
 }
 
@@ -301,7 +320,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
     cell.textLabel.text = self.viewDescriptions[indexPath.row];
-    cell.textLabel.font = [UIFont systemFontOfSize:13];
+    cell.textLabel.font = [UIFont systemFontOfSize:14];
     cell.accessoryType = (indexPath.row == self.selectedIndex) ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
     return cell;
 }
@@ -399,6 +418,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
+- (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)candidates;
 @end
 
 @implementation AutoClickManager {
@@ -442,7 +462,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 触发点击（只触发手势，无手势则跳过） ----
+// ---- 触发点击：只触发手势，不模拟触摸 ----
 - (void)triggerTapOnView:(UIView *)view {
     if (!view) return;
     BOOL hasTap = NO;
@@ -500,51 +520,41 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", targetPoint.x, targetPoint.y);
     showTapMarkerAtPoint(targetPoint);
     
-    // 获取用户选择的索引
     NSInteger index = gTargetViewIndex;
-    // 重新收集 FloatView（确保最新）
     NSMutableArray *candidates = [NSMutableArray array];
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
         if (w.hidden) continue;
-        [self findFloatViews:w intoArray:candidates];
+        [self collectViews:w intoArray:candidates];
     }
-    // 按坐标排序
-    [candidates sortUsingComparator:^NSComparisonResult(id a, id b) {
-        UIView *va = (UIView *)a;
-        UIView *vb = (UIView *)b;
-        CGRect ra = va.frame;
-        CGRect rb = vb.frame;
-        if (ra.origin.y < rb.origin.y) return NSOrderedAscending;
-        if (ra.origin.y > rb.origin.y) return NSOrderedDescending;
-        if (ra.origin.x < rb.origin.x) return NSOrderedAscending;
-        if (ra.origin.x > rb.origin.x) return NSOrderedDescending;
-        return NSOrderedSame;
-    }];
     
     if (index >= 0 && index < candidates.count) {
         UIView *targetView = candidates[index];
         [self triggerTapOnView:targetView];
     } else {
-        NSLog(@"[AutoClick] ❌ Invalid target index %ld, using first if available", (long)index);
-        if (candidates.count > 0) {
-            [self triggerTapOnView:candidates[0]];
-        }
+        NSLog(@"[AutoClick] ❌ Invalid target index %ld", (long)index);
     }
 }
 
-- (void)findFloatViews:(UIView *)view intoArray:(NSMutableArray *)candidates {
-    if (!view) return;
-    if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
-        CGRect frame = view.frame;
-        if (frame.origin.x >= 0 && frame.origin.y >= 0) {
-            [candidates addObject:view];
-        }
+// ---- 收集视图（与设置界面一致，过滤条件相同） ----
+- (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)candidates {
+    if (!view || view.hidden) return;
+    CGRect frame = view.frame;
+    CGFloat w = frame.size.width;
+    CGFloat h = frame.size.height;
+    BOOL sizeOk = (w >= 20 && w <= 120 && h >= 20 && h <= 120);
+    NSString *className = NSStringFromClass([view class]);
+    BOOL isRelevant = [className rangeOfString:@"Float" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                      [className rangeOfString:@"Image" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                      [className rangeOfString:@"Button" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                      [className isEqualToString:@"UIView"];
+    if (sizeOk && isRelevant) {
+        [candidates addObject:view];
     }
     for (UIView *sub in view.subviews) {
-        [self findFloatViews:sub intoArray:candidates];
+        [self collectViews:sub intoArray:candidates];
     }
 }
 
