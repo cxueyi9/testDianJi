@@ -483,12 +483,8 @@ static void showTapMarkerAtPoint(CGPoint point) {
     // point 已经是屏幕坐标，直接使用
     NSLog(@"[AutoClick] 📐 Using screen point directly: (%.0f,%.0f)", point.x, point.y);
     
-    // 先尝试短按 (0.2秒)
+    // 只发送短按 (0.2秒)
     [self sendTapAtPoint:point inWindow:window withDuration:0.2];
-    // 延迟后尝试长按 (1.0秒)
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        [self sendTapAtPoint:point inWindow:window withDuration:1.0];
-    });
 }
 
 - (void)performClick {
