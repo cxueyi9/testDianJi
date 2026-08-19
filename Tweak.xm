@@ -326,7 +326,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 + (instancetype)sharedManager;
 - (void)performClick;
 - (UIView *)findFloatViewInView:(UIView *)view;
-- (void)sendTapAtPoint:(CGPoint)point toView:(UIView *)view inWindow:(UIWindow *)window;
+- (void)sendTapAtPoint:(CGPoint)screenPoint withDuration:(NSTimeInterval)duration;
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
 @end
 
@@ -383,22 +383,29 @@ static void showTapMarkerAtPoint(CGPoint point) {
     return nil;
 }
 
-// ---- 发送触摸事件到指定视图和窗口 ----
-- (void)sendTapAtPoint:(CGPoint)point toView:(UIView *)view inWindow:(UIWindow *)window {
-    if (!view || !window) {
-        NSLog(@"[AutoClick] ❌ Invalid view or window");
+// ---- 发送触摸事件到屏幕坐标（支持自定义持续时间） ----
+- (void)sendTapAtPoint:(CGPoint)screenPoint withDuration:(NSTimeInterval)duration {
+    NSLog(@"[AutoClick] 📱 Sending manual touch at screen (%.0f,%.0f) with duration %.2f", screenPoint.x, screenPoint.y, duration);
+    UIWindow *window = GetKeyWindow();
+    if (!window) {
+        NSLog(@"[AutoClick] ❌ No key window");
         return;
     }
-    NSLog(@"[AutoClick] 📱 Sending manual touch at (%.0f,%.0f) to view %@ in window %@", point.x, point.y, NSStringFromClass([view class]), NSStringFromClass([window class]));
-    
-    CGPoint windowPoint = [window convertPoint:point fromView:nil];
+    CGPoint windowPoint = [window convertPoint:screenPoint fromWindow:nil];
     UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inWindow:window];
-    [touch setView:view];
+    if (!touch) {
+        NSLog(@"[AutoClick] ❌ Failed to create touch");
+        return;
+    }
+    UIView *hitView = [window hitTest:windowPoint withEvent:nil];
+    if (hitView) {
+        [touch setView:hitView];
+        if ([touch respondsToSelector:@selector(setGestureView:)]) {
+            [touch setGestureView:hitView];
+        }
+    }
     [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
     [touch setTapCount:1];
-    if ([touch respondsToSelector:@selector(setGestureView:)]) {
-        [touch setGestureView:view];
-    }
     
     UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
     [event _clearTouches];
@@ -406,7 +413,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     [event _addTouch:touch forDelayedDelivery:NO];
     [[UIApplication sharedApplication] sendEvent:event];
     
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
         [event _clearTouches];
         [event kif_setEventWithTouches:@[touch]];
@@ -421,7 +428,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     if (!view) return;
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
     
-    // 先尝试手势
+    // 先尝试手势（无参数）
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [g valueForKey:@"targets"];
@@ -471,14 +478,14 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 使用新的事件发送方式
-    UIWindow *window = view.window;
-    if (!window) {
-        NSLog(@"[AutoClick] ❌ View has no window");
-        return;
-    }
+    // 转换为屏幕坐标
     CGPoint screenPoint = [view convertPoint:point toView:nil];
-    [self sendTapAtPoint:screenPoint toView:view inWindow:window];
+    // 先尝试短按 (0.1秒)
+    [self sendTapAtPoint:screenPoint withDuration:0.1];
+    // 延迟后尝试长按 (0.5秒) 以触发可能的菜单
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        [self sendTapAtPoint:screenPoint withDuration:0.5];
+    });
 }
 
 - (void)performClick {
