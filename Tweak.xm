@@ -234,6 +234,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSMutableArray *descriptions = [NSMutableArray array];
     CGRect screen = [UIScreen mainScreen].bounds;
     
+    // 1. 先通过枚举收集候选视图（使用稳定的过滤条件）
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
@@ -242,7 +243,31 @@ static void showTapMarkerAtPoint(CGPoint point) {
         [self collectViews:w intoArray:candidates descriptions:descriptions screenBounds:screen];
     }
     
-    // 按 frame 排序
+    // 2. 手动精确查找 FloatView（老贝贝图标）
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
+            continue;
+        }
+        if (w.hidden) continue;
+        UIView *floatView = [self findFloatViewInView:w];
+        if (floatView) {
+            // 检查是否已在 candidates 中
+            BOOL exists = NO;
+            for (UIView *v in candidates) {
+                if (v == floatView) {
+                    exists = YES;
+                    break;
+                }
+            }
+            if (!exists) {
+                [candidates addObject:floatView];
+                CGRect frame = floatView.frame;
+                [descriptions addObject:[NSString stringWithFormat:@"FloatView (%.0f,%.0f)", frame.origin.x, frame.origin.y]];
+            }
+        }
+    }
+    
+    // 按坐标排序
     [candidates sortUsingComparator:^NSComparisonResult(id a, id b) {
         UIView *va = (UIView *)a;
         UIView *vb = (UIView *)b;
@@ -268,19 +293,30 @@ static void showTapMarkerAtPoint(CGPoint point) {
     BOOL inScreen = CGRectIntersectsRect(frame, screen) && !CGRectIsEmpty(frame);
     BOOL sizeOk = (w >= 20 && w <= 120 && h >= 20 && h <= 120);
     NSString *className = NSStringFromClass([view class]);
-    // 只收集类名包含 Float, Image, Button 或 自定义视图（如 FloatView）
+    // 只收集常见的悬浮图标类，避免 UIDimmingView 等
     BOOL isRelevant = [className rangeOfString:@"Float" options:NSCaseInsensitiveSearch].location != NSNotFound ||
                       [className rangeOfString:@"Image" options:NSCaseInsensitiveSearch].location != NSNotFound ||
                       [className rangeOfString:@"Button" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                      [className isEqualToString:@"UIView"]; // 也可能有自定义视图
+                      [className isEqualToString:@"UIView"];
     if (inScreen && sizeOk && isRelevant) {
         [candidates addObject:view];
-        // 只显示类名和坐标 (x,y)
         [descriptions addObject:[NSString stringWithFormat:@"%@ (%.0f,%.0f)", className, frame.origin.x, frame.origin.y]];
     }
     for (UIView *sub in view.subviews) {
         [self collectViews:sub intoArray:candidates descriptions:descriptions screenBounds:screen];
     }
+}
+
+// ---- 精确查找 FloatView ----
+- (UIView *)findFloatViewInView:(UIView *)view {
+    if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
+        return view;
+    }
+    for (UIView *sub in view.subviews) {
+        UIView *result = [self findFloatViewInView:sub];
+        if (result) return result;
+    }
+    return nil;
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -419,6 +455,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 + (instancetype)sharedManager;
 - (void)performClick;
 - (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)candidates;
+- (UIView *)findFloatViewInView:(UIView *)view;
 @end
 
 @implementation AutoClickManager {
@@ -529,6 +566,26 @@ static void showTapMarkerAtPoint(CGPoint point) {
         if (w.hidden) continue;
         [self collectViews:w intoArray:candidates];
     }
+    // 额外手动查找 FloatView（确保不遗漏）
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
+            continue;
+        }
+        if (w.hidden) continue;
+        UIView *floatView = [self findFloatViewInView:w];
+        if (floatView) {
+            BOOL exists = NO;
+            for (UIView *v in candidates) {
+                if (v == floatView) {
+                    exists = YES;
+                    break;
+                }
+            }
+            if (!exists) {
+                [candidates addObject:floatView];
+            }
+        }
+    }
     
     if (index >= 0 && index < candidates.count) {
         UIView *targetView = candidates[index];
@@ -556,6 +613,18 @@ static void showTapMarkerAtPoint(CGPoint point) {
     for (UIView *sub in view.subviews) {
         [self collectViews:sub intoArray:candidates];
     }
+}
+
+// ---- 精确查找 FloatView ----
+- (UIView *)findFloatViewInView:(UIView *)view {
+    if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
+        return view;
+    }
+    for (UIView *sub in view.subviews) {
+        UIView *result = [self findFloatViewInView:sub];
+        if (result) return result;
+    }
+    return nil;
 }
 
 @end
