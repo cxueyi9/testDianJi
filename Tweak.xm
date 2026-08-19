@@ -312,7 +312,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
 + (instancetype)sharedManager;
 - (void)performClick;
 - (UIView *)findFloatViewInView:(UIView *)view;
-- (UIView *)findInteractiveViewAtPoint:(CGPoint)point inView:(UIView *)view;
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
 - (void)simulateTapOnFloatView:(UIView *)floatView atPoint:(CGPoint)point;
 - (void)simulateTapOnImageView:(UIView *)imageView;
@@ -372,38 +371,62 @@ static void showTapMarkerAtPoint(CGPoint point) {
     return nil;
 }
 
-// ---- 递归查找包含坐标且可交互的视图（优先手势或 UIControl） ----
-- (UIView *)findInteractiveViewAtPoint:(CGPoint)point inView:(UIView *)view {
-    if (!view || view.hidden || !view.userInteractionEnabled) {
-        return nil;
-    }
-    CGPoint localPoint = [view convertPoint:point fromView:nil];
-    if (![view pointInside:localPoint withEvent:nil]) {
-        return nil;
-    }
-    // 优先子视图（深度优先，越深越精确）
-    for (UIView *subview in [view.subviews reverseObjectEnumerator]) {
-        UIView *found = [self findInteractiveViewAtPoint:point inView:subview];
-        if (found) {
-            return found;
+// ---- 安全执行 selector ----
+- (void)safePerformSelector:(SEL)sel onTarget:(id)target withObject:(id)object {
+    if (!target || !sel) return;
+    @try {
+        if ([target respondsToSelector:sel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [target performSelector:sel withObject:object];
+#pragma clang diagnostic pop
         }
+    } @catch (NSException *exception) {
+        NSLog(@"[AutoClick] ⚠️ Exception: %@", exception);
     }
-    // 如果当前视图有手势识别器（且包含 UITapGestureRecognizer）或属于 UIControl，则返回
-    if ([view isKindOfClass:[UIControl class]] && view.userInteractionEnabled) {
-        return view;
-    }
-    for (UIGestureRecognizer *gesture in view.gestureRecognizers) {
-        if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
-            return view;
-        }
-    }
-    return nil;
 }
 
 // ---- 触发点击 ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
+    if (!view) {
+        NSLog(@"[AutoClick] ❌ view is nil");
+        return;
+    }
     NSLog(@"[AutoClick] 🎯 Triggering tap on %@ at (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
-    // 优先手势
+    
+    // 1. 如果是 UIImageView，向上查找父视图中的 UIControl 或 UIButton
+    if ([view isKindOfClass:[UIImageView class]]) {
+        UIView *parent = view.superview;
+        while (parent) {
+            if ([parent isKindOfClass:[UIControl class]]) {
+                NSLog(@"[AutoClick] ✅ Found UIControl parent: %@", NSStringFromClass([parent class]));
+                [(UIControl *)parent sendActionsForControlEvents:UIControlEventTouchUpInside];
+                NSLog(@"[AutoClick] ✅ UIControl action sent");
+                return;
+            }
+            parent = parent.superview;
+        }
+        // 如果没有找到 UIControl，尝试在父视图上触发手势
+        parent = view.superview;
+        if (parent) {
+            // 检查父视图的手势
+            for (UIGestureRecognizer *gesture in parent.gestureRecognizers) {
+                if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
+                    [self safePerformSelector:@selector(handleTap:) onTarget:gesture withObject:gesture];
+                    return;
+                }
+            }
+            // 否则在父视图上直接调用 touches
+            CGPoint parentPoint = [parent convertPoint:point fromView:nil];
+            UITouch *touch = [[UITouch alloc] initAtPoint:parentPoint inView:parent];
+            [parent touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
+            [parent touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+            NSLog(@"[AutoClick] ✅ touchesBegan/Ended sent to parent %@", NSStringFromClass([parent class]));
+            return;
+        }
+    }
+    
+    // 2. 优先触发手势识别器
     for (UIGestureRecognizer *gesture in view.gestureRecognizers) {
         if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [gesture valueForKey:@"targets"];
@@ -413,28 +436,30 @@ static void showTapMarkerAtPoint(CGPoint point) {
                     id actionTarget = [targetObj valueForKey:@"target"];
                     SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
                     if (actionTarget && action) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                        [actionTarget performSelector:action withObject:gesture];
-#pragma clang diagnostic pop
-                        NSLog(@"[AutoClick] ✅ Gesture action triggered");
+                        [self safePerformSelector:action onTarget:actionTarget withObject:gesture];
                     }
                 }
             }
             return;
         }
     }
-    // 如果是 UIControl
+    
+    // 3. 如果是 UIControl
     if ([view isKindOfClass:[UIControl class]]) {
         [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
         NSLog(@"[AutoClick] ✅ UIControl action sent");
         return;
     }
-    // 直接 touches
+    
+    // 4. 直接调用 touchesBegan/Ended（但可能不安全）
     UITouch *touch = [[UITouch alloc] initAtPoint:point inView:view];
-    [view touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
-    [view touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
-    NSLog(@"[AutoClick] ✅ touchesBegan/Ended sent");
+    @try {
+        [view touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
+        [view touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+        NSLog(@"[AutoClick] ✅ touchesBegan/Ended sent to %@", NSStringFromClass([view class]));
+    } @catch (NSException *exception) {
+        NSLog(@"[AutoClick] ⚠️ Exception in touches: %@", exception);
+    }
 }
 
 - (void)performClick {
@@ -452,34 +477,32 @@ static void showTapMarkerAtPoint(CGPoint point) {
             NSLog(@"[AutoClick] 🎯 Found FloatView in window: %@", NSStringFromClass([w class]));
             CGPoint centerInFloat = CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds));
             CGPoint screenCenter = [floatView convertPoint:centerInFloat toView:nil];
+            NSLog(@"[AutoClick] 📐 FloatView center at screen: (%.0f, %.0f)", screenCenter.x, screenCenter.y);
             [self triggerTapOnView:floatView atPoint:screenCenter];
             return;
         }
     }
     
-    // ---- 策略2: 查找 level 1999 的窗口并深入查找可交互视图 ----
+    // ---- 策略2: 查找 level 1999 的窗口 ----
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
         if (w.windowLevel == 1999.0) {
             NSLog(@"[AutoClick] 🎯 Found window with level 1999: %@", NSStringFromClass([w class]));
-            CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
-            // 查找可交互视图
-            UIView *targetView = [self findInteractiveViewAtPoint:windowPoint inView:w];
-            if (targetView) {
-                [self triggerTapOnView:targetView atPoint:windowPoint];
-                return;
+            // 尝试点击其根视图
+            UIView *rootView = w.rootViewController.view;
+            if (rootView) {
+                CGPoint localPoint = [rootView convertPoint:point fromView:nil];
+                UIView *hitView = [rootView hitTest:localPoint withEvent:nil];
+                if (hitView && hitView != rootView) {
+                    [self triggerTapOnView:hitView atPoint:localPoint];
+                    return;
+                } else {
+                    [self triggerTapOnView:rootView atPoint:localPoint];
+                    return;
+                }
             }
-            // 如果没找到，尝试 hitTest（但过滤掉 UIWindow 本身）
-            UIView *hitView = [w hitTest:windowPoint withEvent:nil];
-            if (hitView && hitView != w) {
-                [self triggerTapOnView:hitView atPoint:windowPoint];
-                return;
-            }
-            // 否则直接点击根视图（可能无效，但作为最后尝试）
-            [self triggerTapOnView:w atPoint:windowPoint];
-            return;
         }
     }
     
