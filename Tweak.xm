@@ -54,8 +54,8 @@ static UIWindow* GetKeyWindow(void) {
 // 配置管理
 // ============================================
 static NSString *const kConfigFileName = @"autoclick_config.plist";
-static CGFloat gClickX = 100.0;
-static CGFloat gClickY = 100.0;
+static CGFloat gClickX = 390.0;
+static CGFloat gClickY = 400.0;
 static CGFloat gFloatX = 100.0;
 static CGFloat gFloatY = 100.0;
 static const CGFloat kFloatSize = 60.0;
@@ -325,7 +325,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
-- (UIView *)findFloatViewInView:(UIView *)view;
+- (NSArray<UIView *> *)findAllFloatViewsInView:(UIView *)view;
 - (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration;
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
 @end
@@ -371,16 +371,16 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 递归查找 FloatView ----
-- (UIView *)findFloatViewInView:(UIView *)view {
+// ---- 递归查找所有 FloatView ----
+- (NSArray<UIView *> *)findAllFloatViewsInView:(UIView *)view {
+    NSMutableArray *result = [NSMutableArray array];
     if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
-        return view;
+        [result addObject:view];
     }
     for (UIView *sub in view.subviews) {
-        UIView *result = [self findFloatViewInView:sub];
-        if (result) return result;
+        [result addObjectsFromArray:[self findAllFloatViewsInView:sub]];
     }
-    return nil;
+    return result;
 }
 
 // ---- 发送触摸事件到指定窗口的屏幕坐标 ----
@@ -419,7 +419,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 // ---- 触发点击 ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
     if (!view) return;
-    NSLog(@"[AutoClick] 🎯 Triggering on %@ at screen point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
+    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
     
     // 先尝试手势（无参数）
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
@@ -441,18 +441,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
                                 return;
                             }
                         } @catch (NSException *e) {
-                            @try {
-                                if ([actionTarget respondsToSelector:action]) {
-                                    #pragma clang diagnostic push
-                                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                                    [actionTarget performSelector:action withObject:g];
-                                    #pragma clang diagnostic pop
-                                    NSLog(@"[AutoClick] ✅ Gesture action triggered (with gesture) on %@", actionTarget);
-                                    return;
-                                }
-                            } @catch (NSException *e2) {
-                                NSLog(@"[AutoClick] ❌ Exception: %@", e2);
-                            }
+                            // 忽略异常
                         }
                     }
                 }
@@ -467,18 +456,17 @@ static void showTapMarkerAtPoint(CGPoint point) {
             NSLog(@"[AutoClick] ✅ UIControl action sent");
             return;
         } @catch (NSException *e) {
-            NSLog(@"[AutoClick] ⚠️ UIControl exception: %@", e);
+            // 忽略
         }
     }
     
-    // 获取视图所在的窗口
+    // 使用触摸事件（短按 0.2 秒）
     UIWindow *window = view.window;
     if (!window) {
         NSLog(@"[AutoClick] ❌ View has no window");
         return;
     }
-    
-    // point 已经是屏幕坐标，直接使用
+    // point 已经是屏幕坐标
     [self sendTapAtPoint:point inWindow:window withDuration:0.2];
 }
 
@@ -487,25 +475,71 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
     showTapMarkerAtPoint(point);
     
-    // ---- 策略1: 查找 FloatView（老贝贝图标） ----
+    // ---- 收集所有 FloatView ----
+    NSMutableArray *allFloatViews = [NSMutableArray array];
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
-        UIView *floatView = [self findFloatViewInView:w];
-        if (floatView) {
-            NSLog(@"[AutoClick] 🎯 Found FloatView in window: %@", NSStringFromClass([w class]));
-            CGPoint center = CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds));
-            CGPoint screenCenter = [floatView convertPoint:center toView:nil];
-            [self triggerTapOnView:floatView atPoint:screenCenter];
+        [allFloatViews addObjectsFromArray:[self findAllFloatViewsInView:w]];
+    }
+    
+    if (allFloatViews.count > 0) {
+        // 选择距离用户点击坐标最近的 FloatView
+        UIView *closest = nil;
+        CGFloat minDist = CGFLOAT_MAX;
+        for (UIView *fv in allFloatViews) {
+            CGPoint center = CGPointMake(CGRectGetMidX(fv.bounds), CGRectGetMidY(fv.bounds));
+            CGPoint screenCenter = [fv convertPoint:center toView:nil];
+            CGFloat dx = screenCenter.x - point.x;
+            CGFloat dy = screenCenter.y - point.y;
+            CGFloat dist = sqrt(dx*dx + dy*dy);
+            if (dist < minDist) {
+                minDist = dist;
+                closest = fv;
+            }
+        }
+        if (closest) {
+            CGPoint center = CGPointMake(CGRectGetMidX(closest.bounds), CGRectGetMidY(closest.bounds));
+            CGPoint screenCenter = [closest convertPoint:center toView:nil];
+            NSLog(@"[AutoClick] 🎯 Selected FloatView at screen center (%.0f,%.0f)", screenCenter.x, screenCenter.y);
+            [self triggerTapOnView:closest atPoint:screenCenter];
             return;
         }
     }
     
-    // ---- 策略2: 如果没找到 FloatView，尝试 hitTest ----
-    // 但只针对老贝贝的窗口（level 1999）或直接点击坐标（但可能误触其他插件）
-    // 为了安全，这里只打印日志，不执行实际点击，避免与其他插件冲突
-    NSLog(@"[AutoClick] ❌ FloatView not found, skip click to avoid conflict with other plugins");
+    // ---- 如果没找到 FloatView，回退到 hitTest ----
+    UIView *hitView = nil;
+    CGPoint hitPoint = CGPointZero;
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
+            continue;
+        }
+        if (w.hidden) continue;
+        CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
+        UIView *view = [w hitTest:windowPoint withEvent:nil];
+        if (view && ![view isKindOfClass:NSClassFromString(@"FlutterView")] && ![view isKindOfClass:[UIWindow class]]) {
+            hitView = view;
+            hitPoint = windowPoint;
+            break;
+        }
+    }
+    
+    if (!hitView) {
+        NSLog(@"[AutoClick] ❌ No view found");
+        return;
+    }
+    
+    NSLog(@"[AutoClick] 🎯 hitTest found: %@", NSStringFromClass([hitView class]));
+    UIView *targetView = hitView;
+    if ([hitView isKindOfClass:[UIImageView class]] || [hitView isKindOfClass:[UILabel class]]) {
+        if (hitView.superview) {
+            targetView = hitView.superview;
+        }
+    }
+    CGPoint center = CGPointMake(CGRectGetMidX(targetView.bounds), CGRectGetMidY(targetView.bounds));
+    CGPoint screenCenter = [targetView convertPoint:center toView:nil];
+    [self triggerTapOnView:targetView atPoint:screenCenter];
 }
 
 @end
