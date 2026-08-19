@@ -326,7 +326,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 + (instancetype)sharedManager;
 - (void)performClick;
 - (UIView *)findFloatViewInView:(UIView *)view;
-- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
+- (void)sendTapToFloatView:(UIView *)floatView;
 @end
 
 @implementation AutoClickManager {
@@ -382,40 +382,47 @@ static void showTapMarkerAtPoint(CGPoint point) {
     return nil;
 }
 
-// ---- 触发点击（只触发手势，不模拟触摸） ----
-- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
-    if (!view) return;
-    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
+// ---- 只向 FloatView 发送触摸 ----
+- (void)sendTapToFloatView:(UIView *)floatView {
+    if (!floatView) return;
+    // 获取 floatView 的中心点屏幕坐标
+    CGPoint center = CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds));
+    CGPoint screenCenter = [floatView convertPoint:center toView:nil];
+    NSLog(@"[AutoClick] 📱 Sending touch to FloatView at screen (%.0f,%.0f)", screenCenter.x, screenCenter.y);
     
-    // 只尝试手势，不进行触摸模拟
-    for (UIGestureRecognizer *g in view.gestureRecognizers) {
-        if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
-            id targets = [g valueForKey:@"targets"];
-            if (targets) {
-                NSArray *targetsArray = (NSArray *)targets;
-                for (id targetObj in targetsArray) {
-                    id actionTarget = [targetObj valueForKey:@"target"];
-                    SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
-                    if (actionTarget && action) {
-                        @try {
-                            if ([actionTarget respondsToSelector:action]) {
-                                #pragma clang diagnostic push
-                                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                                [actionTarget performSelector:action];
-                                #pragma clang diagnostic pop
-                                NSLog(@"[AutoClick] ✅ Gesture action triggered on %@", actionTarget);
-                                return;
-                            }
-                        } @catch (NSException *e) {
-                            NSLog(@"[AutoClick] ⚠️ Exception in gesture trigger: %@", e);
-                        }
-                    }
-                }
-            }
-        }
+    UIWindow *window = floatView.window;
+    if (!window) {
+        NSLog(@"[AutoClick] ❌ FloatView has no window");
+        return;
     }
-    // 如果没有手势或触发失败，不进行其他操作，直接返回
-    NSLog(@"[AutoClick] ⚠️ No tap gesture found on %@, abort", NSStringFromClass([view class]));
+    CGPoint windowPoint = [window convertPoint:screenCenter fromWindow:nil];
+    @try {
+        UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inWindow:window];
+        if (!touch) return;
+        // 关键：设置 view 为 floatView，确保事件只发送到它
+        [touch setView:floatView];
+        [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
+        [touch setTapCount:1];
+        if ([touch respondsToSelector:@selector(setGestureView:)]) {
+            [touch setGestureView:floatView];
+        }
+        UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
+        [event _clearTouches];
+        [event kif_setEventWithTouches:@[touch]];
+        [event _addTouch:touch forDelayedDelivery:NO];
+        [[UIApplication sharedApplication] sendEvent:event];
+        
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
+            [event _clearTouches];
+            [event kif_setEventWithTouches:@[touch]];
+            [event _addTouch:touch forDelayedDelivery:NO];
+            [[UIApplication sharedApplication] sendEvent:event];
+            NSLog(@"[AutoClick] ✅ Touch ended");
+        });
+    } @catch (NSException *e) {
+        NSLog(@"[AutoClick] ❌ Exception: %@", e);
+    }
 }
 
 // ---- 点击入口 ----
@@ -432,10 +439,10 @@ static void showTapMarkerAtPoint(CGPoint point) {
         if (w.hidden) continue;
         UIView *floatView = [self findFloatViewInView:w];
         if (floatView) {
-            CGPoint center = CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds));
-            CGPoint screenCenter = [floatView convertPoint:center toView:nil];
-            NSLog(@"[AutoClick] 🎯 Found FloatView at screen center (%.0f,%.0f)", screenCenter.x, screenCenter.y);
-            [self triggerTapOnView:floatView atPoint:screenCenter];
+            NSLog(@"[AutoClick] 🎯 Found FloatView at screen center (%.0f,%.0f)", 
+                  [floatView convertPoint:CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds)) toView:nil].x,
+                  [floatView convertPoint:CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds)) toView:nil].y);
+            [self sendTapToFloatView:floatView];
             return;
         }
     }
