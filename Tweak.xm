@@ -459,11 +459,10 @@ static void simulateTapWithGSEvent(CGPoint point) {
         return;
     }
 
-    if ([hitView isKindOfClass:NSClassFromString(@"FlutterView")]) {
-        NSLog(@"[AutoClick] 🎯 FlutterView detected");
-        [self simulateFlutterTouchAtPoint:hitPoint onView:hitView];
-        return;
-    }
+if ([hitView isKindOfClass:NSClassFromString(@"FlutterView")]) {
+    [self simulateFlutterTouchAtPoint:hitPoint onView:hitView inWindow:hitWindow];
+    return;
+}
 
     // ---- 常规 UIKit 处理 ----
     UITouch *touch = [[UITouch alloc] initAtPoint:hitPoint inView:hitView];
@@ -496,57 +495,45 @@ static void simulateTapWithGSEvent(CGPoint point) {
 // ============================================
 // 模拟点击 UIImageView（通过手势识别器）
 // ============================================
-- (void)simulateTapOnImageView:(UIView *)imageView {
-    // 打印屏幕坐标
-    CGRect screenRect = [imageView convertRect:imageView.bounds toView:nil];
-    NSLog(@"[AutoClick] 📐 ImageView screen rect: %@", NSStringFromCGRect(screenRect));
-    
-    // 遍历手势识别器
-    for (UIGestureRecognizer *gesture in imageView.gestureRecognizers) {
-        if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
-            NSLog(@"[AutoClick] ✅ Found UITapGestureRecognizer, triggering...");
-            id targets = [gesture valueForKey:@"targets"];
-            if (targets) {
-                NSArray *targetsArray = (NSArray *)targets;
-                for (id targetObj in targetsArray) {
-                    id actionTarget = [targetObj valueForKey:@"target"];
-                    SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
-                    if (actionTarget && action) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                        [actionTarget performSelector:action withObject:gesture];
-#pragma clang diagnostic pop
-                        NSLog(@"[AutoClick] ✅ Gesture action triggered on: %@", actionTarget);
-                    }
-                }
-            }
-            return;
-        }
-    }
-    
-    // 备用：直接调用 touchesBegan
+- (void)simulateTapOnImageView:(UIView *)imageView inWindow:(UIWindow *)window {
+    // 通过目标窗口发送触摸事件
     UITouch *touch = [[UITouch alloc] initAtPoint:imageView.center inView:imageView];
-    [imageView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
-    [imageView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
-    NSLog(@"[AutoClick] ✅ touchesBegan/Ended sent as fallback");
+    [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
+    UIEvent *event = [self eventWithTouches:@[touch] inWindow:window];
+    [window sendEvent:event];
+    
+    [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
+    event = [self eventWithTouches:@[touch] inWindow:window];
+    [window sendEvent:event];
 }
 
 // ============================================
 // 模拟点击 FlutterView
 // ============================================
-- (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView {
+- (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView inWindow:(UIWindow *)window {
+    // 构造 UITouch 并发送到 FlutterView
     UITouch *touch = [[UITouch alloc] initAtPoint:point inView:flutterView];
-    [flutterView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
-    [flutterView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
-    NSLog(@"[AutoClick] ✅ FlutterView touches sent directly");
+    [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
+    UIEvent *event = [self eventWithTouches:@[touch] inWindow:window];
+    [window sendEvent:event];
     
-    // 同时尝试 PTFakeTouch
-    NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
-    if (pointId > 0) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            [PTFakeMetaTouch fakeTouchId:pointId AtPoint:point withTouchPhase:UITouchPhaseEnded];
-        });
+    // 发送抬起事件
+    [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
+    event = [self eventWithTouches:@[touch] inWindow:window];
+    [window sendEvent:event];
+    
+    NSLog(@"[AutoClick] ✅ FlutterView touches sent via target window");
+}
+
+- (UIEvent *)eventWithTouches:(NSArray *)touches inWindow:(UIWindow *)window {
+    // 使用 UIApplication 的私有方法 _touchesEvent 创建事件
+    UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
+    [event _clearTouches];
+    [event kif_setEventWithTouches:touches];
+    for (UITouch *touch in touches) {
+        [event _addTouch:touch forDelayedDelivery:NO];
     }
+    return event;
 }
 
 @end
