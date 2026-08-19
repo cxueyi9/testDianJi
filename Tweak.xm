@@ -5,6 +5,8 @@
 #import <objc/runtime.h>
 #import "PTFakeMetaTouch.h"
 #import "UITouch-KIFAdditions.h"
+#import "UIApplication-KIFAdditions.h"
+#import "UIEvent+KIFAdditions.h"
 
 // ============================================
 // 前向声明
@@ -381,21 +383,39 @@ static void showTapMarkerAtPoint(CGPoint point) {
     return nil;
 }
 
-// ---- 使用 PTFakeTouch 发送点击 ----
+// ---- 使用手动事件发送点击 ----
 - (void)sendTapAtPoint:(CGPoint)point {
-    NSLog(@"[AutoClick] 📱 Sending PTFakeTouch at screen (%.0f,%.0f)", point.x, point.y);
-    NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
-    if (pointId > 0) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            [PTFakeMetaTouch fakeTouchId:pointId AtPoint:point withTouchPhase:UITouchPhaseEnded];
-            NSLog(@"[AutoClick] ✅ PTFakeTouch tap sent");
-        });
-    } else {
-        NSLog(@"[AutoClick] ❌ PTFakeTouch failed");
+    NSLog(@"[AutoClick] 📱 Sending manual touch at (%.0f,%.0f)", point.x, point.y);
+    UIWindow *window = GetKeyWindow();
+    if (!window) {
+        NSLog(@"[AutoClick] ❌ No key window");
+        return;
     }
+    UITouch *touch = [[UITouch alloc] initAtPoint:point inWindow:window];
+    if (!touch) {
+        NSLog(@"[AutoClick] ❌ Failed to create touch");
+        return;
+    }
+    UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
+    if (!event) {
+        NSLog(@"[AutoClick] ❌ Failed to get _touchesEvent");
+        return;
+    }
+    [event _clearTouches];
+    [event kif_setEventWithTouches:@[touch]];
+    [event _addTouch:touch forDelayedDelivery:NO];
+    
+    [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
+    [[UIApplication sharedApplication] sendEvent:event];
+    
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
+        [[UIApplication sharedApplication] sendEvent:event];
+        NSLog(@"[AutoClick] ✅ Manual touch sent");
+    });
 }
 
-// ---- 触发点击（唯一定义） ----
+// ---- 触发点击 ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
     if (!view) return;
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
@@ -450,11 +470,10 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 如果都没有，使用 PTFakeTouch（点已经是屏幕坐标）
+    // 如果没有手势或 UIControl，使用手动事件
     [self sendTapAtPoint:point];
 }
 
-// ---- 执行点击 ----
 - (void)performClick {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
@@ -499,7 +518,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     
     NSLog(@"[AutoClick] 🎯 hitTest found: %@", NSStringFromClass([hitView class]));
     
-    // ---- 如果是 UIImageView 或 UILabel，使用其父视图 ----
     UIView *targetView = hitView;
     if ([hitView isKindOfClass:[UIImageView class]] || [hitView isKindOfClass:[UILabel class]]) {
         if (hitView.superview) {
@@ -508,12 +526,11 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 直接获取 targetView 在屏幕上的中心点
+    // 获取 targetView 在屏幕上的中心点
     CGPoint center = CGPointMake(CGRectGetMidX(targetView.bounds), CGRectGetMidY(targetView.bounds));
     CGPoint screenCenter = [targetView convertPoint:center toView:nil];
     NSLog(@"[AutoClick] 📐 Target view center on screen: (%.0f,%.0f)", screenCenter.x, screenCenter.y);
     
-    // 直接使用屏幕中心点触发
     [self triggerTapOnView:targetView atPoint:screenCenter];
 }
 
