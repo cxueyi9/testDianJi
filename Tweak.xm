@@ -391,13 +391,14 @@ static void showTapMarkerAtPoint(CGPoint point) {
         NSLog(@"[AutoClick] ❌ No key window");
         return;
     }
-    CGPoint windowPoint = [window convertPoint:screenPoint fromWindow:nil];
-    UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inWindow:window];
+    // 直接使用屏幕坐标，不再转换
+    UITouch *touch = [[UITouch alloc] initAtPoint:screenPoint inWindow:window];
     if (!touch) {
         NSLog(@"[AutoClick] ❌ Failed to create touch");
         return;
     }
-    UIView *hitView = [window hitTest:windowPoint withEvent:nil];
+    // 设置 hitTest 视图
+    UIView *hitView = [window hitTest:screenPoint withEvent:nil];
     if (hitView) {
         [touch setView:hitView];
         if ([touch respondsToSelector:@selector(setGestureView:)]) {
@@ -478,14 +479,18 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 转换为屏幕坐标
-    CGPoint screenPoint = [view convertPoint:point toView:nil];
-    // 先尝试短按 (0.1秒)
-    [self sendTapAtPoint:screenPoint withDuration:0.1];
-    // 延迟后尝试长按 (0.5秒) 以触发可能的菜单
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        [self sendTapAtPoint:screenPoint withDuration:0.5];
-    });
+    // 转换为屏幕坐标（点已经是屏幕坐标？检查）
+    CGPoint screenPoint = point;
+    // 如果 point 是视图坐标，转换为屏幕坐标
+    if (![view isKindOfClass:[UIWindow class]]) {
+        screenPoint = [view convertPoint:point toView:nil];
+    }
+    // 判断是否需要长按：如果视图是 M-f...（老贝贝容器）或它的某个子类，我们使用长按
+    NSString *className = NSStringFromClass([view class]);
+    BOOL isTarget = [className containsString:@"M-f"] || [className containsString:@"FloatView"];
+    NSTimeInterval duration = isTarget ? 1.0 : 0.2; // 老贝贝图标长按1秒，其他0.2秒
+    NSLog(@"[AutoClick] 🔄 Using duration %.1f for view %@", duration, className);
+    [self sendTapAtPoint:screenPoint withDuration:duration];
 }
 
 - (void)performClick {
