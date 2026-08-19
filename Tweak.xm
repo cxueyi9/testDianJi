@@ -54,7 +54,7 @@ static CGFloat gClickX = 390.0;
 static CGFloat gClickY = 400.0;
 static CGFloat gFloatX = 100.0;
 static CGFloat gFloatY = 100.0;
-static NSInteger gTargetViewIndex = 0; // 用户选择的视图索引
+static NSInteger gTargetViewIndex = 0;
 static const CGFloat kFloatSize = 60.0;
 
 static void loadConfig(void) {
@@ -148,15 +148,15 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 // ============================================
-// 设置页面 ViewController（包含视图选择列表）
+// 设置页面 ViewController
 // ============================================
 @interface AutoClickSettingsViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *xField;
 @property (nonatomic, strong) UITextField *yField;
 @property (nonatomic, strong) UILabel *floatPosLabel;
 @property (nonatomic, strong) UITableView *tableView;
-@property (nonatomic, strong) NSArray *candidateViews; // 存储候选视图对象
-@property (nonatomic, strong) NSMutableArray *viewDescriptions; // 显示用
+@property (nonatomic, strong) NSArray *candidateViews;
+@property (nonatomic, strong) NSMutableArray *viewDescriptions;
 @property (nonatomic, assign) NSInteger selectedIndex;
 @end
 
@@ -171,7 +171,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     UIBarButtonItem *closeBtn = [[UIBarButtonItem alloc] initWithTitle:@"关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
     self.navigationItem.leftBarButtonItem = closeBtn;
     
-    // 收集候选视图
     [self collectCandidateViews];
     
     CGFloat margin = 20;
@@ -180,7 +179,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     CGFloat fieldWidth = 120;
     CGFloat height = 40;
     
-    // 点击 X
     UILabel *xLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
     xLabel.text = @"点击 X:";
     [self.view addSubview:xLabel];
@@ -191,7 +189,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _xField.delegate = self;
     [self.view addSubview:_xField];
     
-    // 点击 Y
     yOffset += height + 10;
     UILabel *yLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
     yLabel.text = @"点击 Y:";
@@ -203,7 +200,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _yField.delegate = self;
     [self.view addSubview:_yField];
     
-    // 保存按钮
     yOffset += height + 20;
     UIButton *saveBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     saveBtn.frame = CGRectMake(margin, yOffset, 100, 40);
@@ -211,7 +207,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     [saveBtn addTarget:self action:@selector(save) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:saveBtn];
     
-    // 候选视图列表
     yOffset += 60;
     UILabel *listLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, 300, 30)];
     listLabel.text = @"选择目标视图 (点击选择):";
@@ -228,7 +223,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     [_tableView registerClass:[UITableViewCell class] forCellReuseIdentifier:@"Cell"];
     [self.view addSubview:_tableView];
     
-    // 悬浮窗位置
     yOffset = self.view.bounds.size.height - 60;
     _floatPosLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, 300, 40)];
     _floatPosLabel.text = [NSString stringWithFormat:@"悬浮窗左上角: (%.0f, %.0f)", gFloatX, gFloatY];
@@ -248,7 +242,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
         [self collectViews:w intoArray:candidates descriptions:descriptions screenBounds:screen];
     }
     
-    // 按 frame 排序（便于定位）
     [candidates sortUsingComparator:^NSComparisonResult(id a, id b) {
         UIView *va = (UIView *)a;
         UIView *vb = (UIView *)b;
@@ -272,20 +265,10 @@ static void showTapMarkerAtPoint(CGPoint point) {
     CGFloat w = frame.size.width;
     CGFloat h = frame.size.height;
     BOOL inScreen = CGRectIntersectsRect(frame, screen) && !CGRectIsEmpty(frame);
-    BOOL sizeOk = (w >= 20 && w <= 120 && h >= 20 && h <= 120);
+    BOOL sizeOk = (w >= 10 && w <= 200 && h >= 10 && h <= 200);
     NSString *className = NSStringFromClass([view class]);
-    BOOL isExcluded = [className isEqualToString:@"UIDimmingView"] || [className isEqualToString:@"UILabel"];
-    // 检查是否可交互
-    BOOL interactive = NO;
-    for (UIGestureRecognizer *g in view.gestureRecognizers) {
-        if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
-            interactive = YES;
-            break;
-        }
-    }
-    if ([view isKindOfClass:[UIControl class]]) interactive = YES;
-    
-    if (inScreen && sizeOk && !isExcluded && interactive) {
+    BOOL isExcluded = [className isEqualToString:@"UIDimmingView"];
+    if (inScreen && sizeOk && !isExcluded) {
         [candidates addObject:view];
         [descriptions addObject:[NSString stringWithFormat:@"%@ (%.0f,%.0f,%.0f,%.0f)", className, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]];
     }
@@ -472,12 +455,23 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 触发点击（只触发手势，不模拟触摸） ----
+// ---- 触发点击（只触发手势，无手势则跳过） ----
 - (void)triggerTapOnView:(UIView *)view {
     if (!view) return;
+    // 检查是否有手势或属于 UIControl
+    BOOL hasTap = NO;
+    for (UIGestureRecognizer *g in view.gestureRecognizers) {
+        if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
+            hasTap = YES;
+            break;
+        }
+    }
+    if (!hasTap && ![view isKindOfClass:[UIControl class]]) {
+        NSLog(@"[AutoClick] ⚠️ No tap gesture or UIControl on %@, skip", NSStringFromClass([view class]));
+        return;
+    }
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@", NSStringFromClass([view class]));
     
-    // 只尝试手势
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [g valueForKey:@"targets"];
@@ -504,7 +498,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
             }
         }
     }
-    // 如果是 UIControl，发送事件
     if ([view isKindOfClass:[UIControl class]]) {
         @try {
             [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
@@ -521,9 +514,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", targetPoint.x, targetPoint.y);
     showTapMarkerAtPoint(targetPoint);
     
-    // 获取用户选择的视图
     NSInteger index = gTargetViewIndex;
-    // 重新收集候选视图（确保最新）
     NSMutableArray *candidates = [NSMutableArray array];
     CGRect screen = [UIScreen mainScreen].bounds;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
@@ -533,7 +524,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
         if (w.hidden) continue;
         [self collectViews:w intoArray:candidates screenBounds:screen];
     }
-    // 排序保持与设置界面一致
     [candidates sortUsingComparator:^NSComparisonResult(id a, id b) {
         UIView *va = (UIView *)a;
         UIView *vb = (UIView *)b;
@@ -560,18 +550,10 @@ static void showTapMarkerAtPoint(CGPoint point) {
     CGFloat w = frame.size.width;
     CGFloat h = frame.size.height;
     BOOL inScreen = CGRectIntersectsRect(frame, screen) && !CGRectIsEmpty(frame);
-    BOOL sizeOk = (w >= 20 && w <= 120 && h >= 20 && h <= 120);
+    BOOL sizeOk = (w >= 10 && w <= 200 && h >= 10 && h <= 200);
     NSString *className = NSStringFromClass([view class]);
-    BOOL isExcluded = [className isEqualToString:@"UIDimmingView"] || [className isEqualToString:@"UILabel"];
-    BOOL interactive = NO;
-    for (UIGestureRecognizer *g in view.gestureRecognizers) {
-        if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
-            interactive = YES;
-            break;
-        }
-    }
-    if ([view isKindOfClass:[UIControl class]]) interactive = YES;
-    if (inScreen && sizeOk && !isExcluded && interactive) {
+    BOOL isExcluded = [className isEqualToString:@"UIDimmingView"];
+    if (inScreen && sizeOk && !isExcluded) {
         [candidates addObject:view];
     }
     for (UIView *sub in view.subviews) {
