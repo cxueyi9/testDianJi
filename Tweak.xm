@@ -3,7 +3,12 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <objc/runtime.h>
-#import "PTFakeMetaTouch.h"  // 只需这一个头文件
+
+// 我们不再需要 PTFakeMetaTouch，直接使用私有 API 构造事件
+// 导入必要的头文件用于构造 UITouch 和 UIEvent
+#import "UITouch-KIFAdditions.h"
+#import "UIEvent+KIFAdditions.h"
+#import "UIApplication-KIFAdditions.h"
 
 // ============================================
 // 前向声明
@@ -52,7 +57,7 @@ static UIWindow* GetKeyWindow(void) {
 // ============================================
 static NSString *const kConfigFileName = @"autoclick_config.plist";
 static CGFloat gClickX = 390.0;
-static CGFloat gClickY = 420.0;
+static CGFloat gClickY = 390.0;
 static CGFloat gFloatX = 100.0;
 static CGFloat gFloatY = 100.0;
 static const CGFloat kFloatSize = 60.0;
@@ -322,7 +327,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
-- (void)sendTapAtPoint:(CGPoint)point;
+- (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration;
 @end
 
 @implementation AutoClickManager {
@@ -366,37 +371,68 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 🔥 核心：用 PTFakeMetaTouch 在坐标发送触摸 ----
-- (void)sendTapAtPoint:(CGPoint)point {
-    NSLog(@"[AutoClick] 📱 Sending tap at (%.0f,%.0f)", point.x, point.y);
+// ---- 发送触摸事件到指定窗口 ----
+- (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration {
+    if (!window) {
+        NSLog(@"[AutoClick] ❌ Window is nil");
+        return;
+    }
+    CGPoint windowPoint = [window convertPoint:screenPoint fromWindow:nil];
+    NSLog(@"[AutoClick] 📱 Sending touch at screen(%.0f,%.0f) -> window(%.0f,%.0f) duration %.2f", screenPoint.x, screenPoint.y, windowPoint.x, windowPoint.y, duration);
+    
     @try {
-        // 先发送 touch down
-        NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
-        if (pointId > 0) {
-            // 延迟 0.1 秒发送 touch up
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                @try {
-                    [PTFakeMetaTouch fakeTouchId:pointId AtPoint:point withTouchPhase:UITouchPhaseEnded];
-                    NSLog(@"[AutoClick] ✅ Tap sent successfully");
-                } @catch (NSException *e) {
-                    NSLog(@"[AutoClick] ❌ Exception in touch up: %@", e);
-                }
-            });
-        } else {
-            NSLog(@"[AutoClick] ❌ Failed to get pointId");
-        }
+        UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inWindow:window];
+        if (!touch) { return; }
+        [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
+        [touch setTapCount:1];
+        
+        UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
+        [event _clearTouches];
+        [event kif_setEventWithTouches:@[touch]];
+        [event _addTouch:touch forDelayedDelivery:NO];
+        [[UIApplication sharedApplication] sendEvent:event];
+        
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
+            [event _clearTouches];
+            [event kif_setEventWithTouches:@[touch]];
+            [event _addTouch:touch forDelayedDelivery:NO];
+            [[UIApplication sharedApplication] sendEvent:event];
+            NSLog(@"[AutoClick] ✅ Touch ended");
+        });
     } @catch (NSException *e) {
-        NSLog(@"[AutoClick] ❌ Exception in sendTapAtPoint: %@", e);
+        NSLog(@"[AutoClick] ❌ Exception: %@", e);
     }
 }
 
+// ---- 点击入口 ----
 - (void)performClick {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
     showTapMarkerAtPoint(point);
     
-    // 直接发送触摸，不进行任何视图查找
-    [self sendTapAtPoint:point];
+    // ---- 查找 windowLevel == 1999 的窗口（老贝贝所在窗口） ----
+    UIWindow *targetWindow = nil;
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
+            continue;
+        }
+        if (w.windowLevel == 1999.0) {
+            targetWindow = w;
+            break;
+        }
+    }
+    
+    // 如果没找到，回退到 keyWindow
+    if (!targetWindow) {
+        targetWindow = GetKeyWindow();
+        NSLog(@"[AutoClick] ⚠️ No window with level 1999, using keyWindow: %@", NSStringFromClass([targetWindow class]));
+    } else {
+        NSLog(@"[AutoClick] 🎯 Found window with level 1999: %@", NSStringFromClass([targetWindow class]));
+    }
+    
+    // 发送触摸
+    [self sendTapAtPoint:point inWindow:targetWindow withDuration:0.2];
 }
 
 @end
