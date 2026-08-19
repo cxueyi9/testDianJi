@@ -398,7 +398,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
         NSLog(@"[AutoClick] ❌ Failed to create touch");
         return;
     }
-    // 可选：设置 view（我们不强制，让系统自动 hitTest）
     [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
     [touch setTapCount:1];
     
@@ -503,7 +502,20 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
         UIView *floatView = [self findFloatViewInView:w];
         if (floatView) {
+            // 🔍 添加详细调试信息
             NSLog(@"[AutoClick] 🎯 Found FloatView in window: %@", NSStringFromClass([w class]));
+            NSLog(@"[AutoClick] 🔍 FloatView frame: %@", NSStringFromCGRect(floatView.frame));
+            NSLog(@"[AutoClick] 🔍 FloatView superview: %@", NSStringFromClass([floatView.superview class]));
+            NSLog(@"[AutoClick] 🔍 FloatView window level: %.1f", w.windowLevel);
+            // 打印整个父视图链
+            UIView *parent = floatView.superview;
+            int depth = 0;
+            while (parent && depth < 5) {
+                NSLog(@"[AutoClick] 🔍   parent[%d]: %@ frame:%@", depth, NSStringFromClass([parent class]), NSStringFromCGRect(parent.frame));
+                parent = parent.superview;
+                depth++;
+            }
+            
             CGPoint center = CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds));
             CGPoint screenCenter = [floatView convertPoint:center toView:nil];
             [self triggerTapOnView:floatView atPoint:screenCenter];
@@ -511,7 +523,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 策略2: hitTest
+    // 策略2: hitTest（原有逻辑）
     UIView *hitView = nil;
     CGPoint hitPoint = CGPointZero;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
@@ -543,7 +555,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 获取 targetView 在屏幕上的中心点
     CGPoint center = CGPointMake(CGRectGetMidX(targetView.bounds), CGRectGetMidY(targetView.bounds));
     CGPoint screenCenter = [targetView convertPoint:center toView:nil];
     NSLog(@"[AutoClick] 📐 Target view center on screen: (%.0f,%.0f)", screenCenter.x, screenCenter.y);
