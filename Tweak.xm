@@ -171,6 +171,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     UIBarButtonItem *closeBtn = [[UIBarButtonItem alloc] initWithTitle:@"关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
     self.navigationItem.leftBarButtonItem = closeBtn;
     
+    // 收集候选视图：只添加 FloatView（老贝贝图标）
     [self collectCandidateViews];
     
     CGFloat margin = 20;
@@ -232,48 +233,34 @@ static void showTapMarkerAtPoint(CGPoint point) {
 - (void)collectCandidateViews {
     NSMutableArray *candidates = [NSMutableArray array];
     NSMutableArray *descriptions = [NSMutableArray array];
-    CGRect screen = [UIScreen mainScreen].bounds;
     
+    // 遍历所有窗口，查找类名为 FloatView 的视图
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
         if (w.hidden) continue;
-        [self collectViews:w intoArray:candidates descriptions:descriptions screenBounds:screen];
+        [self findFloatViews:w intoArray:candidates descriptions:descriptions];
     }
-    
-    [candidates sortUsingComparator:^NSComparisonResult(id a, id b) {
-        UIView *va = (UIView *)a;
-        UIView *vb = (UIView *)b;
-        CGRect ra = va.frame;
-        CGRect rb = vb.frame;
-        if (ra.origin.y < rb.origin.y) return NSOrderedAscending;
-        if (ra.origin.y > rb.origin.y) return NSOrderedDescending;
-        if (ra.origin.x < rb.origin.x) return NSOrderedAscending;
-        if (ra.origin.x > rb.origin.x) return NSOrderedDescending;
-        return NSOrderedSame;
-    }];
     
     self.candidateViews = candidates;
     self.viewDescriptions = descriptions;
     [self.tableView reloadData];
 }
 
-- (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)candidates descriptions:(NSMutableArray *)descriptions screenBounds:(CGRect)screen {
-    if (!view || view.hidden) return;
-    CGRect frame = view.frame;
-    CGFloat w = frame.size.width;
-    CGFloat h = frame.size.height;
-    BOOL inScreen = CGRectIntersectsRect(frame, screen) && !CGRectIsEmpty(frame);
-    BOOL sizeOk = (w >= 10 && w <= 200 && h >= 10 && h <= 200);
+- (void)findFloatViews:(UIView *)view intoArray:(NSMutableArray *)candidates descriptions:(NSMutableArray *)descriptions {
+    if (!view) return;
     NSString *className = NSStringFromClass([view class]);
-    BOOL isExcluded = [className isEqualToString:@"UIDimmingView"];
-    if (inScreen && sizeOk && !isExcluded) {
-        [candidates addObject:view];
-        [descriptions addObject:[NSString stringWithFormat:@"%@ (%.0f,%.0f,%.0f,%.0f)", className, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]];
+    if ([className isEqualToString:@"FloatView"]) {
+        CGRect frame = view.frame;
+        // 只添加坐标在屏幕范围内的 FloatView（避免负坐标）
+        if (frame.origin.x >= 0 && frame.origin.y >= 0) {
+            [candidates addObject:view];
+            [descriptions addObject:[NSString stringWithFormat:@"FloatView (%.0f,%.0f)", frame.origin.x, frame.origin.y]];
+        }
     }
     for (UIView *sub in view.subviews) {
-        [self collectViews:sub intoArray:candidates descriptions:descriptions screenBounds:screen];
+        [self findFloatViews:sub intoArray:candidates descriptions:descriptions];
     }
 }
 
@@ -458,7 +445,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
 // ---- 触发点击（只触发手势，无手势则跳过） ----
 - (void)triggerTapOnView:(UIView *)view {
     if (!view) return;
-    // 检查是否有手势或属于 UIControl
     BOOL hasTap = NO;
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
@@ -514,16 +500,18 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", targetPoint.x, targetPoint.y);
     showTapMarkerAtPoint(targetPoint);
     
+    // 获取用户选择的索引
     NSInteger index = gTargetViewIndex;
+    // 重新收集 FloatView（确保最新）
     NSMutableArray *candidates = [NSMutableArray array];
-    CGRect screen = [UIScreen mainScreen].bounds;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
         if (w.hidden) continue;
-        [self collectViews:w intoArray:candidates screenBounds:screen];
+        [self findFloatViews:w intoArray:candidates];
     }
+    // 按坐标排序
     [candidates sortUsingComparator:^NSComparisonResult(id a, id b) {
         UIView *va = (UIView *)a;
         UIView *vb = (UIView *)b;
@@ -540,24 +528,23 @@ static void showTapMarkerAtPoint(CGPoint point) {
         UIView *targetView = candidates[index];
         [self triggerTapOnView:targetView];
     } else {
-        NSLog(@"[AutoClick] ❌ Invalid target index %ld", (long)index);
+        NSLog(@"[AutoClick] ❌ Invalid target index %ld, using first if available", (long)index);
+        if (candidates.count > 0) {
+            [self triggerTapOnView:candidates[0]];
+        }
     }
 }
 
-- (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)candidates screenBounds:(CGRect)screen {
-    if (!view || view.hidden) return;
-    CGRect frame = view.frame;
-    CGFloat w = frame.size.width;
-    CGFloat h = frame.size.height;
-    BOOL inScreen = CGRectIntersectsRect(frame, screen) && !CGRectIsEmpty(frame);
-    BOOL sizeOk = (w >= 10 && w <= 200 && h >= 10 && h <= 200);
-    NSString *className = NSStringFromClass([view class]);
-    BOOL isExcluded = [className isEqualToString:@"UIDimmingView"];
-    if (inScreen && sizeOk && !isExcluded) {
-        [candidates addObject:view];
+- (void)findFloatViews:(UIView *)view intoArray:(NSMutableArray *)candidates {
+    if (!view) return;
+    if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
+        CGRect frame = view.frame;
+        if (frame.origin.x >= 0 && frame.origin.y >= 0) {
+            [candidates addObject:view];
+        }
     }
     for (UIView *sub in view.subviews) {
-        [self collectViews:sub intoArray:candidates screenBounds:screen];
+        [self findFloatViews:sub intoArray:candidates];
     }
 }
 
