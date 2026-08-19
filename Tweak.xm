@@ -363,15 +363,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] %@%@ frame:%@, gestures:%lu", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame), (unsigned long)view.gestureRecognizers.count);
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         NSLog(@"[AutoClick] %@  gesture: %@", indent, NSStringFromClass([g class]));
-        id targets = [g valueForKey:@"targets"];
-        if (targets) {
-            NSArray *targetsArray = (NSArray *)targets;
-            for (id targetObj in targetsArray) {
-                id actionTarget = [targetObj valueForKey:@"target"];
-                NSString *actionName = NSStringFromSelector(NSSelectorFromString([targetObj valueForKey:@"action"]));
-                NSLog(@"[AutoClick] %@    target: %@, action: %@", indent, actionTarget, actionName);
-            }
-        }
     }
     for (UIView *sub in view.subviews) {
         [self printViewHierarchy:sub depth:depth+1];
@@ -417,13 +408,10 @@ static void showTapMarkerAtPoint(CGPoint point) {
                     SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
                     if (actionTarget && action) {
                         NSLog(@"[AutoClick] ✅ Method 1: Trying to execute action: %@ on target: %@", NSStringFromSelector(action), actionTarget);
-                        // 不带参数执行
                         [self safePerformSelector:action onTarget:actionTarget];
-                        // 即使执行了，也继续尝试其他方法，以防该方法无效
                     }
                 }
             }
-            // 不立即返回，继续尝试其他方法
         }
     }
     
@@ -493,28 +481,32 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
     showTapMarkerAtPoint(point);
     
-    // ---- 查找 level 1999 窗口并打印其视图层级 ----
+    // ---- 查找 level 1999 窗口 ----
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
         if (w.windowLevel == 1999.0) {
             NSLog(@"[AutoClick] 🎯 Found window with level 1999: %@", NSStringFromClass([w class]));
-            NSLog(@"[AutoClick] 📋 Printing view hierarchy of level 1999 window:");
-            [self printViewHierarchy:w depth:0];
             
-            // 尝试点击根视图
-            UIView *rootView = w.rootViewController.view;
-            if (rootView) {
-                CGPoint localPoint = [rootView convertPoint:point fromView:nil];
-                UIView *hitView = [rootView hitTest:localPoint withEvent:nil];
-                if (hitView && hitView != rootView) {
-                    [self triggerTapOnView:hitView atPoint:localPoint];
-                    return;
-                } else {
-                    [self triggerTapOnView:rootView atPoint:localPoint];
-                    return;
+            // ---- 在窗口上执行 hitTest ----
+            CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
+            UIView *hitView = [w hitTest:windowPoint withEvent:nil];
+            if (hitView) {
+                NSLog(@"[AutoClick] 🎯 hitTest returned: %@", NSStringFromClass([hitView class]));
+                // 打印 hitView 的父视图链
+                UIView *parent = hitView;
+                int depth = 0;
+                while (parent && depth < 10) {
+                    NSLog(@"[AutoClick]   %@ frame:%@", NSStringFromClass([parent class]), NSStringFromCGRect(parent.frame));
+                    parent = parent.superview;
+                    depth++;
                 }
+                // 触发点击
+                [self triggerTapOnView:hitView atPoint:windowPoint];
+                return;
+            } else {
+                NSLog(@"[AutoClick] ❌ hitTest returned nil at point (%.0f,%.0f)", windowPoint.x, windowPoint.y);
             }
         }
     }
@@ -531,6 +523,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
             if ([hitView isKindOfClass:NSClassFromString(@"FlutterView")] || [hitView isKindOfClass:[UIWindow class]]) {
                 continue;
             }
+            NSLog(@"[AutoClick] 🎯 Fallback hitTest: %@", NSStringFromClass([hitView class]));
             [self triggerTapOnView:hitView atPoint:windowPoint];
             return;
         }
