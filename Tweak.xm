@@ -3,10 +3,6 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <objc/runtime.h>
-#import "PTFakeMetaTouch.h"
-#import "UITouch-KIFAdditions.h"
-#import "UIApplication-KIFAdditions.h"
-#import "UIEvent+KIFAdditions.h"
 
 // ============================================
 // 前向声明
@@ -51,14 +47,14 @@ static UIWindow* GetKeyWindow(void) {
 }
 
 // ============================================
-// 配置管理
+// 配置管理（增加目标索引）
 // ============================================
 static NSString *const kConfigFileName = @"autoclick_config.plist";
 static CGFloat gClickX = 390.0;
 static CGFloat gClickY = 400.0;
 static CGFloat gFloatX = 100.0;
 static CGFloat gFloatY = 100.0;
-static NSInteger gSelectedIndex = 0; // 默认选择第一个
+static NSInteger gTargetIndex = 0;  // 用户选择的目标索引
 static const CGFloat kFloatSize = 60.0;
 
 static void loadConfig(void) {
@@ -70,8 +66,8 @@ static void loadConfig(void) {
         if (config[@"clickY"]) gClickY = [config[@"clickY"] doubleValue];
         if (config[@"floatX"]) gFloatX = [config[@"floatX"] doubleValue];
         if (config[@"floatY"]) gFloatY = [config[@"floatY"] doubleValue];
-        if (config[@"selectedIndex"]) gSelectedIndex = [config[@"selectedIndex"] integerValue];
-        NSLog(@"[AutoClick] 📂 Config loaded: click(%.0f,%.0f) float(%.0f,%.0f) index:%ld", gClickX, gClickY, gFloatX, gFloatY, (long)gSelectedIndex);
+        if (config[@"targetIndex"]) gTargetIndex = [config[@"targetIndex"] integerValue];
+        NSLog(@"[AutoClick] 📂 Config loaded: click(%.0f,%.0f) float(%.0f,%.0f) targetIndex=%ld", gClickX, gClickY, gFloatX, gFloatY, (long)gTargetIndex);
     } else {
         NSLog(@"[AutoClick] 📂 No config, using defaults");
     }
@@ -86,7 +82,7 @@ static void saveConfig(void) {
         @"clickY": @(gClickY),
         @"floatX": @(gFloatX),
         @"floatY": @(gFloatY),
-        @"selectedIndex": @(gSelectedIndex)
+        @"targetIndex": @(gTargetIndex)
     };
     NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
     NSString *configPath = [docPath stringByAppendingPathComponent:kConfigFileName];
@@ -152,14 +148,15 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 // ============================================
-// 设置页面 ViewController
+// 设置页面 ViewController（增加目标索引选择）
 // ============================================
-@interface AutoClickSettingsViewController : UIViewController <UITextFieldDelegate>
+@interface AutoClickSettingsViewController : UIViewController <UITextFieldDelegate, UIPickerViewDelegate, UIPickerViewDataSource>
 @property (nonatomic, strong) UITextField *xField;
 @property (nonatomic, strong) UITextField *yField;
 @property (nonatomic, strong) UILabel *floatPosLabel;
-@property (nonatomic, strong) UIButton *selectTargetBtn;
-@property (nonatomic, strong) UILabel *selectedLabel;
+@property (nonatomic, strong) UIPickerView *targetPicker;
+@property (nonatomic, strong) NSArray<NSString *> *targetNames;
+@property (nonatomic, strong) NSArray<UIView *> *targetViews;
 @end
 
 @implementation AutoClickSettingsViewController
@@ -178,113 +175,114 @@ static void showTapMarkerAtPoint(CGPoint point) {
     CGFloat fieldWidth = 120;
     CGFloat height = 40;
 
+    // 点击 X
     UILabel *xLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
     xLabel.text = @"点击 X:";
     [self.view addSubview:xLabel];
-
     _xField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
     _xField.borderStyle = UITextBorderStyleRoundedRect;
     _xField.keyboardType = UIKeyboardTypeDecimalPad;
     _xField.text = [NSString stringWithFormat:@"%.0f", gClickX];
+    _xField.delegate = self;
     [self.view addSubview:_xField];
 
-    yOffset += height + 20;
+    // 点击 Y
+    yOffset += height + 10;
     UILabel *yLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, labelWidth, height)];
     yLabel.text = @"点击 Y:";
     [self.view addSubview:yLabel];
-
     _yField = [[UITextField alloc] initWithFrame:CGRectMake(margin + labelWidth + 10, yOffset, fieldWidth, height)];
     _yField.borderStyle = UITextBorderStyleRoundedRect;
     _yField.keyboardType = UIKeyboardTypeDecimalPad;
     _yField.text = [NSString stringWithFormat:@"%.0f", gClickY];
+    _yField.delegate = self;
     [self.view addSubview:_yField];
 
-    yOffset += height + 30;
+    // 目标索引选择器
+    yOffset += height + 20;
+    UILabel *pickerLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, 200, height)];
+    pickerLabel.text = @"选择目标视图:";
+    [self.view addSubview:pickerLabel];
+
+    // 收集可交互视图
+    [self collectTargets];
+
+    _targetPicker = [[UIPickerView alloc] initWithFrame:CGRectMake(margin, yOffset + height + 5, self.view.bounds.size.width - 2*margin, 100)];
+    _targetPicker.delegate = self;
+    _targetPicker.dataSource = self;
+    [self.view addSubview:_targetPicker];
+
+    // 当前索引选择
+    if (gTargetIndex < _targetNames.count) {
+        [_targetPicker selectRow:gTargetIndex inComponent:0 animated:NO];
+    }
+
+    // 保存按钮
+    yOffset += 160;
     UIButton *saveBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     saveBtn.frame = CGRectMake(margin, yOffset, 100, 40);
-    [saveBtn setTitle:@"保存坐标" forState:UIControlStateNormal];
+    [saveBtn setTitle:@"保存" forState:UIControlStateNormal];
     [saveBtn addTarget:self action:@selector(save) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:saveBtn];
 
-    yOffset += height + 20;
-    _selectTargetBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    _selectTargetBtn.frame = CGRectMake(margin, yOffset, 200, 40);
-    [_selectTargetBtn setTitle:@"选择点击目标" forState:UIControlStateNormal];
-    [_selectTargetBtn addTarget:self action:@selector(selectTarget) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:_selectTargetBtn];
-
-    yOffset += height + 10;
-    _selectedLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, 300, 30)];
-    _selectedLabel.textColor = [UIColor darkGrayColor];
-    _selectedLabel.font = [UIFont systemFontOfSize:14];
-    [self.view addSubview:_selectedLabel];
-    [self updateSelectedLabel];
-
+    // 悬浮窗位置
     yOffset += 60;
     UILabel *floatLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset, 200, height)];
     floatLabel.text = @"悬浮窗左上角:";
     [self.view addSubview:floatLabel];
-
     _floatPosLabel = [[UILabel alloc] initWithFrame:CGRectMake(margin, yOffset + height + 5, 300, height)];
     _floatPosLabel.text = [NSString stringWithFormat:@"(%.0f, %.0f)", gFloatX, gFloatY];
     [self.view addSubview:_floatPosLabel];
 }
 
+- (void)collectTargets {
+    NSMutableArray<UIView *> *views = [NSMutableArray array];
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) continue;
+        [self collectInteractiveViews:w intoArray:views withNames:names];
+    }
+    _targetViews = views;
+    _targetNames = names;
+}
+
+- (void)collectInteractiveViews:(UIView *)view intoArray:(NSMutableArray<UIView *> *)views withNames:(NSMutableArray<NSString *> *)names {
+    if (!view || view.hidden) return;
+    BOOL hasTap = NO;
+    for (UIGestureRecognizer *g in view.gestureRecognizers) {
+        if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
+    }
+    if (hasTap || [view isKindOfClass:[UIControl class]]) {
+        [views addObject:view];
+        // 生成描述信息：类名 + frame
+        NSString *desc = [NSString stringWithFormat:@"%@ (%.0f,%.0f,%.0f,%.0f)",
+                          NSStringFromClass([view class]),
+                          view.frame.origin.x, view.frame.origin.y,
+                          view.frame.size.width, view.frame.size.height];
+        [names addObject:desc];
+    }
+    for (UIView *sub in view.subviews) {
+        [self collectInteractiveViews:sub intoArray:views withNames:names];
+    }
+}
+
+#pragma mark - UIPickerView
+- (NSInteger)numberOfComponentsInPickerView:(UIPickerView *)pickerView {
+    return 1;
+}
+- (NSInteger)pickerView:(UIPickerView *)pickerView numberOfRowsInComponent:(NSInteger)component {
+    return _targetNames.count;
+}
+- (NSString *)pickerView:(UIPickerView *)pickerView titleForRow:(NSInteger)row forComponent:(NSInteger)component {
+    return _targetNames[row];
+}
+- (void)pickerView:(UIPickerView *)pickerView didSelectRow:(NSInteger)row inComponent:(NSInteger)component {
+    gTargetIndex = row;
+}
+
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     _floatPosLabel.text = [NSString stringWithFormat:@"(%.0f, %.0f)", gFloatX, gFloatY];
-    [self updateSelectedLabel];
-}
-
-- (void)updateSelectedLabel {
-    _selectedLabel.text = [NSString stringWithFormat:@"当前选择目标索引: %ld", (long)gSelectedIndex];
-}
-
-- (void)selectTarget {
-    // 收集所有 FloatView
-    NSMutableArray *floatViews = [NSMutableArray array];
-    for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
-            continue;
-        }
-        if (w.hidden) continue;
-        [self collectFloatViews:w intoArray:floatViews];
-    }
-    if (floatViews.count == 0) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"提示" message:@"未找到任何 FloatView" preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-        [self presentViewController:alert animated:YES completion:nil];
-        return;
-    }
-    // 构建选择列表
-    NSMutableArray *titles = [NSMutableArray array];
-    for (NSInteger i = 0; i < floatViews.count; i++) {
-        UIView *v = floatViews[i];
-        CGPoint center = [v convertPoint:CGPointMake(CGRectGetMidX(v.bounds), CGRectGetMidY(v.bounds)) toView:nil];
-        [titles addObject:[NSString stringWithFormat:@"%ld: (%.0f,%.0f)", (long)i, center.x, center.y]];
-    }
-    UIAlertController *actionSheet = [UIAlertController alertControllerWithTitle:@"选择点击目标" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
-    for (NSInteger i = 0; i < titles.count; i++) {
-        NSString *title = titles[i];
-        [actionSheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-            gSelectedIndex = i;
-            saveConfig();
-            [self updateSelectedLabel];
-            NSLog(@"[AutoClick] ✅ Selected FloatView index: %ld", (long)i);
-        }]];
-    }
-    [actionSheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [self presentViewController:actionSheet animated:YES completion:nil];
-}
-
-- (void)collectFloatViews:(UIView *)view intoArray:(NSMutableArray *)array {
-    if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
-        [array addObject:view];
-        return;
-    }
-    for (UIView *sub in view.subviews) {
-        [self collectFloatViews:sub intoArray:array];
-    }
 }
 
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
@@ -301,6 +299,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
     gClickX = x;
     gClickY = y;
+    gTargetIndex = [_targetPicker selectedRowInComponent:0];
     saveConfig();
     [self close];
 }
@@ -312,7 +311,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 // ============================================
-// 悬浮窗视图
+// 悬浮窗视图（保持不变）
 // ============================================
 @interface AutoClickFloatingView : UIView
 @property (nonatomic, weak) id target;
@@ -391,13 +390,13 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @end
 
 // ============================================
-// 主管理器
+// 主管理器（只触发目标索引对应的视图）
 // ============================================
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
-- (void)collectFloatViews:(UIView *)view intoArray:(NSMutableArray *)array;
-- (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration;
+- (void)collectInteractiveViews:(UIView *)view intoArray:(NSMutableArray<UIView *> *)array;
+- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
 @end
 
 @implementation AutoClickManager {
@@ -441,49 +440,64 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 收集所有 FloatView ----
-- (void)collectFloatViews:(UIView *)view intoArray:(NSMutableArray *)array {
-    if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
+// ---- 收集可交互视图 ----
+- (void)collectInteractiveViews:(UIView *)view intoArray:(NSMutableArray<UIView *> *)array {
+    if (!view || view.hidden) return;
+    BOOL hasTap = NO;
+    for (UIGestureRecognizer *g in view.gestureRecognizers) {
+        if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
+    }
+    if (hasTap || [view isKindOfClass:[UIControl class]]) {
         [array addObject:view];
-        return;
     }
     for (UIView *sub in view.subviews) {
-        [self collectFloatViews:sub intoArray:array];
+        [self collectInteractiveViews:sub intoArray:array];
     }
 }
 
-// ---- 发送触摸事件 ----
-- (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration {
-    if (!window) {
-        NSLog(@"[AutoClick] ❌ Window is nil");
-        return;
-    }
-    CGPoint windowPoint = [window convertPoint:screenPoint fromWindow:nil];
-    NSLog(@"[AutoClick] 📱 Sending touch at screen(%.0f,%.0f) -> window(%.0f,%.0f) duration %.2f", screenPoint.x, screenPoint.y, windowPoint.x, windowPoint.y, duration);
+// ---- 触发点击 ----
+- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
+    if (!view) return;
+    NSLog(@"[AutoClick] 🎯 Triggering target view %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
     
-    @try {
-        UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inWindow:window];
-        if (!touch) { return; }
-        [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
-        [touch setTapCount:1];
-        
-        UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
-        [event _clearTouches];
-        [event kif_setEventWithTouches:@[touch]];
-        [event _addTouch:touch forDelayedDelivery:NO];
-        [[UIApplication sharedApplication] sendEvent:event];
-        
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
-            [event _clearTouches];
-            [event kif_setEventWithTouches:@[touch]];
-            [event _addTouch:touch forDelayedDelivery:NO];
-            [[UIApplication sharedApplication] sendEvent:event];
-            NSLog(@"[AutoClick] ✅ Touch ended");
-        });
-    } @catch (NSException *e) {
-        NSLog(@"[AutoClick] ❌ Exception in sendTapAtPoint: %@", e);
+    // 只触发手势
+    for (UIGestureRecognizer *g in view.gestureRecognizers) {
+        if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
+            id targets = [g valueForKey:@"targets"];
+            if (targets) {
+                NSArray *targetsArray = (NSArray *)targets;
+                for (id targetObj in targetsArray) {
+                    id actionTarget = [targetObj valueForKey:@"target"];
+                    SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
+                    if (actionTarget && action) {
+                        @try {
+                            if ([actionTarget respondsToSelector:action]) {
+                                #pragma clang diagnostic push
+                                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                                [actionTarget performSelector:action];
+                                #pragma clang diagnostic pop
+                                NSLog(@"[AutoClick] ✅ Gesture action triggered on %@", actionTarget);
+                                return;
+                            }
+                        } @catch (NSException *e) {
+                            NSLog(@"[AutoClick] ⚠️ Exception: %@", e);
+                        }
+                    }
+                }
+            }
+        }
     }
+    // 如果手势失败，尝试 UIControl
+    if ([view isKindOfClass:[UIControl class]]) {
+        @try {
+            [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
+            NSLog(@"[AutoClick] ✅ UIControl action sent");
+            return;
+        } @catch (NSException *e) {
+            NSLog(@"[AutoClick] ⚠️ UIControl exception: %@", e);
+        }
+    }
+    NSLog(@"[AutoClick] ⚠️ No way to trigger %@", NSStringFromClass([view class]));
 }
 
 // ---- 点击入口 ----
@@ -492,38 +506,30 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", targetPoint.x, targetPoint.y);
     showTapMarkerAtPoint(targetPoint);
     
-    // 收集所有 FloatView
-    NSMutableArray *floatViews = [NSMutableArray array];
+    // 收集所有可交互视图
+    NSMutableArray<UIView *> *allInteractive = [NSMutableArray array];
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
-            continue;
-        }
+        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) continue;
         if (w.hidden) continue;
-        [self collectFloatViews:w intoArray:floatViews];
+        [self collectInteractiveViews:w intoArray:allInteractive];
     }
     
-    if (floatViews.count == 0) {
-        NSLog(@"[AutoClick] ❌ No FloatView found");
+    if (allInteractive.count == 0) {
+        NSLog(@"[AutoClick] ❌ No interactive views found");
         return;
     }
     
-    // 确保索引有效
-    if (gSelectedIndex >= floatViews.count) {
-        gSelectedIndex = 0;
-        saveConfig();
-    }
+    // 确保目标索引有效
+    NSInteger index = gTargetIndex;
+    if (index < 0) index = 0;
+    if (index >= allInteractive.count) index = allInteractive.count - 1;
     
-    UIView *target = floatViews[gSelectedIndex];
-    CGPoint center = CGPointMake(CGRectGetMidX(target.bounds), CGRectGetMidY(target.bounds));
-    CGPoint screenCenter = [target convertPoint:center toView:nil];
-    NSLog(@"[AutoClick] 🎯 Using FloatView index %ld at screen center (%.0f,%.0f)", (long)gSelectedIndex, screenCenter.x, screenCenter.y);
+    UIView *targetView = allInteractive[index];
+    CGPoint center = CGPointMake(CGRectGetMidX(targetView.bounds), CGRectGetMidY(targetView.bounds));
+    CGPoint screenCenter = [targetView convertPoint:center toView:nil];
+    NSLog(@"[AutoClick] 🎯 Using target index %ld: %@ at screen center (%.0f,%.0f)", (long)index, NSStringFromClass([targetView class]), screenCenter.x, screenCenter.y);
     
-    UIWindow *window = target.window;
-    if (!window) {
-        NSLog(@"[AutoClick] ❌ Target view has no window");
-        return;
-    }
-    [self sendTapAtPoint:screenCenter inWindow:window withDuration:0.2];
+    [self triggerTapOnView:targetView atPoint:screenCenter];
 }
 
 @end
