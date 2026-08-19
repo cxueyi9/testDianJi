@@ -441,7 +441,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
                                 return;
                             }
                         } @catch (NSException *e) {
-                            // 忽略异常
+                            // 忽略
                         }
                     }
                 }
@@ -475,7 +475,43 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
     showTapMarkerAtPoint(point);
     
-    // ---- 收集所有 FloatView ----
+    // 策略1: 首先尝试在点击点执行 hitTest，看是否直接命中 FloatView
+    UIView *hitFloatView = nil;
+    UIWindow *hitWindow = nil;
+    CGPoint hitPoint = CGPointZero;
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
+            continue;
+        }
+        if (w.hidden) continue;
+        CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
+        UIView *view = [w hitTest:windowPoint withEvent:nil];
+        if (view) {
+            // 如果命中的是 FloatView 或者其子视图，向上查找 FloatView
+            UIView *current = view;
+            while (current) {
+                if ([NSStringFromClass([current class]) isEqualToString:@"FloatView"]) {
+                    hitFloatView = current;
+                    hitWindow = w;
+                    hitPoint = windowPoint;
+                    break;
+                }
+                current = current.superview;
+            }
+            if (hitFloatView) break;
+        }
+    }
+    
+    if (hitFloatView) {
+        // 直接点击命中的 FloatView
+        CGPoint center = CGPointMake(CGRectGetMidX(hitFloatView.bounds), CGRectGetMidY(hitFloatView.bounds));
+        CGPoint screenCenter = [hitFloatView convertPoint:center toView:nil];
+        NSLog(@"[AutoClick] 🎯 hitTest directly found FloatView at screen center (%.0f,%.0f)", screenCenter.x, screenCenter.y);
+        [self triggerTapOnView:hitFloatView atPoint:screenCenter];
+        return;
+    }
+    
+    // 策略2: 收集所有 FloatView，选择距离最近的，但限制距离阈值（150像素）
     NSMutableArray *allFloatViews = [NSMutableArray array];
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
@@ -485,7 +521,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
     
     if (allFloatViews.count > 0) {
-        // 选择距离用户点击坐标最近的 FloatView
         UIView *closest = nil;
         CGFloat minDist = CGFLOAT_MAX;
         for (UIView *fv in allFloatViews) {
@@ -499,18 +534,21 @@ static void showTapMarkerAtPoint(CGPoint point) {
                 closest = fv;
             }
         }
-        if (closest) {
+        // 只有距离小于150像素时才认为是有效目标，否则可能是远处的其他插件
+        if (closest && minDist < 150.0) {
             CGPoint center = CGPointMake(CGRectGetMidX(closest.bounds), CGRectGetMidY(closest.bounds));
             CGPoint screenCenter = [closest convertPoint:center toView:nil];
-            NSLog(@"[AutoClick] 🎯 Selected FloatView at screen center (%.0f,%.0f)", screenCenter.x, screenCenter.y);
+            NSLog(@"[AutoClick] 🎯 Selected FloatView at screen center (%.0f,%.0f) distance %.1f", screenCenter.x, screenCenter.y, minDist);
             [self triggerTapOnView:closest atPoint:screenCenter];
             return;
+        } else {
+            NSLog(@"[AutoClick] ⚠️ FloatView found but distance %.1f > 150, ignored", minDist);
         }
     }
     
-    // ---- 如果没找到 FloatView，回退到 hitTest ----
+    // 策略3: 回退到普通 hitTest
     UIView *hitView = nil;
-    CGPoint hitPoint = CGPointZero;
+    CGPoint fallbackPoint = CGPointZero;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
@@ -520,7 +558,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
         UIView *view = [w hitTest:windowPoint withEvent:nil];
         if (view && ![view isKindOfClass:NSClassFromString(@"FlutterView")] && ![view isKindOfClass:[UIWindow class]]) {
             hitView = view;
-            hitPoint = windowPoint;
+            fallbackPoint = windowPoint;
             break;
         }
     }
@@ -530,7 +568,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
         return;
     }
     
-    NSLog(@"[AutoClick] 🎯 hitTest found: %@", NSStringFromClass([hitView class]));
+    NSLog(@"[AutoClick] 🎯 Fallback hitTest found: %@", NSStringFromClass([hitView class]));
     UIView *targetView = hitView;
     if ([hitView isKindOfClass:[UIImageView class]] || [hitView isKindOfClass:[UILabel class]]) {
         if (hitView.superview) {
