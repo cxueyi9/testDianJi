@@ -7,7 +7,12 @@
 #import "UITouch-KIFAdditions.h"
 
 // ============================================
-// 辅助函数：获取当前 key window（暂未使用，但保留）
+// 前向声明
+// ============================================
+@class AutoClickFloatingWindow;
+
+// ============================================
+// 辅助函数：获取当前 key window（备用）
 // ============================================
 static UIWindow* GetKeyWindow(void) {
     UIWindow *window = nil;
@@ -108,61 +113,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
         } completion:^(BOOL finished) {
             [marker removeFromSuperview];
         }];
-    });
-}
-
-// ============================================
-// GSEvent 备用（可选项，保留但可能不使用）
-// ============================================
-typedef struct __GSEvent *GSEventRef;
-typedef enum {
-    kGSEventTypeTouchDown = 1,
-    kGSEventTypeTouchUp   = 2,
-} GSEventType;
-static GSEventRef (*GSEventRecordCreate)(GSEventType type, int subtype, CGPoint location, int unknown1, int unknown2, int unknown3) = NULL;
-static void (*GSEventRecordSetPathInfo)(GSEventRef event, CFArrayRef pathInfo) = NULL;
-static void (*GSEventDispatch)(GSEventRef event) = NULL;
-
-static void initGSEvent(void) {
-    void *handle = dlopen("/System/Library/PrivateFrameworks/GraphicsServices.framework/GraphicsServices", RTLD_LAZY);
-    if (handle) {
-        GSEventRecordCreate = (typeof(GSEventRecordCreate))dlsym(handle, "GSEventRecordCreate");
-        GSEventRecordSetPathInfo = (typeof(GSEventRecordSetPathInfo))dlsym(handle, "GSEventRecordSetPathInfo");
-        GSEventDispatch = (typeof(GSEventDispatch))dlsym(handle, "GSEventDispatch");
-        if (GSEventRecordCreate && GSEventDispatch && GSEventRecordSetPathInfo) {
-            NSLog(@"[AutoClick] ✅ GSEvent fully loaded");
-        } else {
-            NSLog(@"[AutoClick] ❌ GSEvent load incomplete");
-        }
-    } else {
-        NSLog(@"[AutoClick] ❌ GraphicsServices framework not found");
-    }
-}
-static void simulateTapWithGSEvent(CGPoint point) {
-    if (!GSEventRecordCreate || !GSEventDispatch) {
-        NSLog(@"[AutoClick] ⚠️ GSEvent not available, skip");
-        return;
-    }
-    GSEventRef down1 = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
-    if (down1) GSEventDispatch(down1);
-    GSEventRef up1 = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
-    if (up1) GSEventDispatch(up1);
-    NSLog(@"[AutoClick] 👆 GSEvent tap (no path)");
-    CFMutableArrayRef path = CFArrayCreateMutable(NULL, 1, &kCFTypeArrayCallBacks);
-    CFArrayAppendValue(path, (const void *)(intptr_t)0);
-    GSEventRef down2 = GSEventRecordCreate(kGSEventTypeTouchDown, 0, point, 0, 0, 0);
-    if (down2) {
-        if (GSEventRecordSetPathInfo) GSEventRecordSetPathInfo(down2, path);
-        GSEventDispatch(down2);
-    }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        GSEventRef up2 = GSEventRecordCreate(kGSEventTypeTouchUp, 0, point, 0, 0, 0);
-        if (up2) {
-            if (GSEventRecordSetPathInfo) GSEventRecordSetPathInfo(up2, path);
-            GSEventDispatch(up2);
-        }
-        CFRelease(path);
-        NSLog(@"[AutoClick] 👆 GSEvent tap (with path)");
     });
 }
 
@@ -361,7 +311,6 @@ static void simulateTapWithGSEvent(CGPoint point) {
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
-- (void)printViewHierarchy:(UIView *)view depth:(int)depth;
 - (void)simulateTapOnImageView:(UIView *)imageView;
 - (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView;
 @end
@@ -384,7 +333,6 @@ static void simulateTapWithGSEvent(CGPoint point) {
     self = [super init];
     if (self) {
         loadConfig();
-        initGSEvent();
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self showFloatingWindow];
         });
@@ -408,9 +356,6 @@ static void simulateTapWithGSEvent(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ============================================
-// 核心点击方法
-// ============================================
 - (void)performClick {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
@@ -450,7 +395,13 @@ static void simulateTapWithGSEvent(CGPoint point) {
           hitPoint.x, hitPoint.y);
 
     // ---- 打印视图层级 ----
-    [self printViewHierarchy:hitView depth:0];
+    UIView *parent = hitView;
+    int depth = 0;
+    while (parent && depth < 10) {
+        NSLog(@"[AutoClick]   %@ frame:%@", NSStringFromClass([parent class]), NSStringFromCGRect(parent.frame));
+        parent = parent.superview;
+        depth++;
+    }
 
     // ---- 根据视图类型选择模拟方式 ----
     if ([hitView isKindOfClass:[UIImageView class]]) {
@@ -459,10 +410,11 @@ static void simulateTapWithGSEvent(CGPoint point) {
         return;
     }
 
-if ([hitView isKindOfClass:NSClassFromString(@"FlutterView")]) {
-    [self simulateFlutterTouchAtPoint:hitPoint onView:hitView inWindow:hitWindow];
-    return;
-}
+    if ([hitView isKindOfClass:NSClassFromString(@"FlutterView")]) {
+        NSLog(@"[AutoClick] 🎯 FlutterView detected");
+        [self simulateFlutterTouchAtPoint:hitPoint onView:hitView];
+        return;
+    }
 
     // ---- 常规 UIKit 处理 ----
     UITouch *touch = [[UITouch alloc] initAtPoint:hitPoint inView:hitView];
@@ -479,61 +431,58 @@ if ([hitView isKindOfClass:NSClassFromString(@"FlutterView")]) {
     }
 }
 
-// ============================================
-// 辅助方法：打印视图层级
-// ============================================
-- (void)printViewHierarchy:(UIView *)view depth:(int)depth {
-    if (!view) return;
-    NSMutableString *indent = [NSMutableString string];
-    for (int i = 0; i < depth; i++) [indent appendString:@"  "];
-    NSLog(@"[AutoClick] %@%@ frame:%@", indent, NSStringFromClass([view class]), NSStringFromCGRect(view.frame));
-    for (UIView *sub in view.subviews) {
-        [self printViewHierarchy:sub depth:depth+1];
+// ---- 模拟点击 UIImageView ----
+- (void)simulateTapOnImageView:(UIView *)imageView {
+    // 打印屏幕坐标
+    CGRect screenRect = [imageView convertRect:imageView.bounds toView:nil];
+    NSLog(@"[AutoClick] 📐 Screen rect: %@", NSStringFromCGRect(screenRect));
+    
+    // 遍历手势识别器，寻找 UITapGestureRecognizer
+    for (UIGestureRecognizer *gesture in imageView.gestureRecognizers) {
+        if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
+            NSLog(@"[AutoClick] ✅ Found UITapGestureRecognizer, triggering...");
+            // 获取 target-action
+            id targets = [gesture valueForKey:@"targets"];
+            if (targets) {
+                NSArray *targetsArray = (NSArray *)targets;
+                for (id targetObj in targetsArray) {
+                    id actionTarget = [targetObj valueForKey:@"target"];
+                    SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
+                    if (actionTarget && action) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                        [actionTarget performSelector:action withObject:gesture];
+#pragma clang diagnostic pop
+                        NSLog(@"[AutoClick] ✅ Gesture action triggered on: %@", actionTarget);
+                    }
+                }
+            }
+            return;
+        }
     }
-}
-
-// ============================================
-// 模拟点击 UIImageView（通过手势识别器）
-// ============================================
-- (void)simulateTapOnImageView:(UIView *)imageView inWindow:(UIWindow *)window {
-    // 通过目标窗口发送触摸事件
+    
+    // 如果没有手势识别器，尝试直接调用 touchesBegan
     UITouch *touch = [[UITouch alloc] initAtPoint:imageView.center inView:imageView];
-    [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
-    UIEvent *event = [self eventWithTouches:@[touch] inWindow:window];
-    [window sendEvent:event];
-    
-    [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
-    event = [self eventWithTouches:@[touch] inWindow:window];
-    [window sendEvent:event];
+    [imageView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
+    [imageView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+    NSLog(@"[AutoClick] ✅ touchesBegan/Ended sent to UIImageView");
 }
 
-// ============================================
-// 模拟点击 FlutterView
-// ============================================
-- (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView inWindow:(UIWindow *)window {
-    // 构造 UITouch 并发送到 FlutterView
+// ---- 模拟 FlutterView 触摸 ----
+- (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView {
+    // 直接调用 touchesBegan/Ended
     UITouch *touch = [[UITouch alloc] initAtPoint:point inView:flutterView];
-    [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
-    UIEvent *event = [self eventWithTouches:@[touch] inWindow:window];
-    [window sendEvent:event];
+    [flutterView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
+    [flutterView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+    NSLog(@"[AutoClick] ✅ FlutterView touches sent directly");
     
-    // 发送抬起事件
-    [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
-    event = [self eventWithTouches:@[touch] inWindow:window];
-    [window sendEvent:event];
-    
-    NSLog(@"[AutoClick] ✅ FlutterView touches sent via target window");
-}
-
-- (UIEvent *)eventWithTouches:(NSArray *)touches inWindow:(UIWindow *)window {
-    // 使用 UIApplication 的私有方法 _touchesEvent 创建事件
-    UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
-    [event _clearTouches];
-    [event kif_setEventWithTouches:touches];
-    for (UITouch *touch in touches) {
-        [event _addTouch:touch forDelayedDelivery:NO];
+    // 同时尝试 PTFakeTouch（可能无效，但保留）
+    NSInteger pointId = [PTFakeMetaTouch fakeTouchId:0 AtPoint:point withTouchPhase:UITouchPhaseBegan];
+    if (pointId > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            [PTFakeMetaTouch fakeTouchId:pointId AtPoint:point withTouchPhase:UITouchPhaseEnded];
+        });
     }
-    return event;
 }
 
 @end
