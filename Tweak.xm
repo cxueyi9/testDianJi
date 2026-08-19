@@ -395,12 +395,12 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
 }
 
-// ---- 只执行手势的 target-action，不模拟触摸，不传递参数 ----
+// ---- 只执行手势的 target-action，不模拟触摸 ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
     if (!view) return;
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@", NSStringFromClass([view class]));
     
-    // 先尝试无参数执行所有手势的 target-action
+    // 先尝试无参数执行
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [g valueForKey:@"targets"];
@@ -411,7 +411,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
                     SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
                     if (actionTarget && action) {
                         @try {
-                            // 只执行不带参数的方法
                             if ([actionTarget respondsToSelector:action]) {
                                 #pragma clang diagnostic push
                                 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
@@ -421,8 +420,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
                                 return;
                             }
                         } @catch (NSException *e) {
-                            NSLog(@"[AutoClick] ⚠️ Exception (no params): %@", e);
-                            // 尝试带参数（如果上面失败）
                             @try {
                                 if ([actionTarget respondsToSelector:action]) {
                                     #pragma clang diagnostic push
@@ -433,7 +430,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
                                     return;
                                 }
                             } @catch (NSException *e2) {
-                                NSLog(@"[AutoClick] ❌ Both attempts failed: %@", e2);
+                                NSLog(@"[AutoClick] ❌ Exception: %@", e2);
                             }
                         }
                     }
@@ -442,14 +439,14 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 如果是 UIControl，发送事件
+    // 如果是 UIControl
     if ([view isKindOfClass:[UIControl class]]) {
         [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
         NSLog(@"[AutoClick] ✅ UIControl action sent");
         return;
     }
     
-    // 如果都没有，使用 PTFakeTouch（但尽量不走到这里）
+    // 如果都没有，使用 PTFakeTouch
     CGPoint screenPoint = [view convertPoint:point toView:nil];
     [self sendTapAtPoint:screenPoint];
 }
@@ -491,30 +488,47 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    if (hitView) {
-        NSLog(@"[AutoClick] 🎯 hitTest found: %@", NSStringFromClass([hitView class]));
-        // 向上查找可点击父视图
-        UIView *target = hitView;
-        while (target) {
-            BOOL hasTap = NO;
-            for (UIGestureRecognizer *g in target.gestureRecognizers) {
-                if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
-                    hasTap = YES;
-                    break;
-                }
-            }
-            if (hasTap || [target isKindOfClass:[UIControl class]]) {
-                NSLog(@"[AutoClick] 🎯 Found responsive parent: %@", NSStringFromClass([target class]));
-                CGPoint converted = [target convertPoint:hitPoint fromView:hitView.superview];
-                [self triggerTapOnView:target atPoint:converted];
-                return;
-            }
-            target = target.superview;
-        }
-        [self triggerTapOnView:hitView atPoint:hitPoint];
-    } else {
+    if (!hitView) {
         NSLog(@"[AutoClick] ❌ No view found");
+        return;
     }
+    
+    NSLog(@"[AutoClick] 🎯 hitTest found: %@", NSStringFromClass([hitView class]));
+    
+    // ---- 核心修改：如果是 UILabel，使用其父视图 ----
+    UIView *targetView = hitView;
+    if ([hitView isKindOfClass:[UILabel class]]) {
+        if (hitView.superview) {
+            targetView = hitView.superview;
+            NSLog(@"[AutoClick] 🔄 UILabel detected, using superview: %@", NSStringFromClass([targetView class]));
+        }
+    }
+    
+    // 向上查找可点击父视图（最多5层）
+    UIView *current = targetView;
+    int depth = 0;
+    while (current && depth < 5) {
+        BOOL hasTap = NO;
+        for (UIGestureRecognizer *g in current.gestureRecognizers) {
+            if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
+                hasTap = YES;
+                break;
+            }
+        }
+        if (hasTap || [current isKindOfClass:[UIControl class]]) {
+            NSLog(@"[AutoClick] 🎯 Found responsive parent: %@", NSStringFromClass([current class]));
+            CGPoint converted = [current convertPoint:hitPoint fromView:hitView.superview];
+            [self triggerTapOnView:current atPoint:converted];
+            return;
+        }
+        current = current.superview;
+        depth++;
+    }
+    
+    // 如果没找到，直接使用 targetView
+    NSLog(@"[AutoClick] ⚠️ No responsive parent, using targetView: %@", NSStringFromClass([targetView class]));
+    CGPoint finalPoint = [targetView convertPoint:hitPoint fromView:hitView.superview];
+    [self triggerTapOnView:targetView atPoint:finalPoint];
 }
 
 @end
