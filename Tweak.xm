@@ -481,7 +481,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     // 策略2: hitTest
     UIView *hitView = nil;
     CGPoint hitPoint = CGPointZero;
-    UIWindow *hitWindow = nil;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
@@ -492,7 +491,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
         if (view && ![view isKindOfClass:NSClassFromString(@"FlutterView")] && ![view isKindOfClass:[UIWindow class]]) {
             hitView = view;
             hitPoint = windowPoint;
-            hitWindow = w;
             break;
         }
     }
