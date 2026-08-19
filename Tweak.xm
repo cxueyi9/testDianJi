@@ -287,8 +287,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     newCenter.y = MAX(halfSize, MIN(newCenter.y, screen.size.height - halfSize));
     self.center = newCenter;
     [gesture setTranslation:CGPointZero inView:self.superview];
-
-    if (gesture.state == UIGestureRecognizerStateEnded) {
+performClickrStateEnded) {
         gFloatX = self.frame.origin.x;
         gFloatY = self.frame.origin.y;
         saveConfig();
@@ -403,7 +402,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // ---- 策略2: 如果没找到 FloatView，使用普通 hitTest 且只对 UIControl 做安全操作 ----
+    // ---- 策略2: hitTest 查找点击点下的视图 ----
     UIView *hitView = nil;
     CGPoint hitPoint = CGPointZero;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
@@ -420,17 +419,52 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    if (hitView) {
-        NSLog(@"[AutoClick] 🎯 Found view via hitTest: %@", NSStringFromClass([hitView class]));
-        if ([hitView isKindOfClass:[UIControl class]]) {
-            [(UIControl *)hitView sendActionsForControlEvents:UIControlEventTouchUpInside];
-            NSLog(@"[AutoClick] ✅ UIControl action sent");
-            return;
-        }
-        [self sendTapAtPoint:hitPoint];
-    } else {
+    if (!hitView) {
         NSLog(@"[AutoClick] ❌ No view found");
+        return;
     }
+    
+    NSLog(@"[AutoClick] 🎯 Found view via hitTest: %@", NSStringFromClass([hitView class]));
+    // 打印视图层级
+    UIView *parent = hitView;
+    int depth = 0;
+    while (parent && depth < 10) {
+        NSLog(@"[AutoClick]   %@ frame:%@", NSStringFromClass([parent class]), NSStringFromCGRect(parent.frame));
+        parent = parent.superview;
+        depth++;
+    }
+    
+    // ---- 查找可点击的父视图 ----
+    UIView *targetView = hitView;
+    // 如果当前是 UIImageView，向上查找
+    if ([hitView isKindOfClass:[UIImageView class]]) {
+        UIView *superview = hitView.superview;
+        while (superview) {
+            // 如果父视图是 FloatView 或 UIControl 或带有手势
+            if ([NSStringFromClass([superview class]) isEqualToString:@"FloatView"] ||
+                [superview isKindOfClass:[UIControl class]] ||
+                superview.gestureRecognizers.count > 0) {
+                targetView = superview;
+                NSLog(@"[AutoClick] 🎯 Using parent view: %@ as target", NSStringFromClass([targetView class]));
+                break;
+            }
+            superview = superview.superview;
+        }
+    }
+    
+    // ---- 对目标视图发送点击 ----
+    // 如果是 UIControl
+    if ([targetView isKindOfClass:[UIControl class]]) {
+        [(UIControl *)targetView sendActionsForControlEvents:UIControlEventTouchUpInside];
+        NSLog(@"[AutoClick] ✅ UIControl action sent");
+        return;
+    }
+    
+    // 否则发送 PTFakeTouch 到目标视图的中心点（屏幕坐标）
+    CGPoint centerInTarget = CGPointMake(CGRectGetMidX(targetView.bounds), CGRectGetMidY(targetView.bounds));
+    CGPoint screenCenter = [targetView convertPoint:centerInTarget toView:nil];
+    NSLog(@"[AutoClick] 📱 Sending PTFakeTouch to %@ at (%.0f,%.0f)", NSStringFromClass([targetView class]), screenCenter.x, screenCenter.y);
+    [self sendTapAtPoint:screenCenter];
 }
 
 @end

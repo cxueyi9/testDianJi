@@ -12,7 +12,8 @@ AutoClick_FILES = Tweak.xm \
     UIEvent+KIFAdditions.m \
     IOHIDEvent+KIF.m
 
-AutoClick_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability -Wno-unused-function -I. -DDLog=NSLog -DRLog=NSLog
+AutoClick_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability -Wno-unused-function -Wno-unused-variable -I. -DDLog=NSLog -DRLog=NSLog
+
 AutoClick_LDFLAGS = -framework UIKit -framework Foundation -framework QuartzCore -framework IOKit
 AutoClick_CODESIGN = NO
 
