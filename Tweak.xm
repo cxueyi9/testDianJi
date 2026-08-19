@@ -393,7 +393,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
     
     // ---- 如果没找到 FloatView，回退到常规 hitTest ----
     UIView *hitView = nil;
-    UIWindow *hitWindow = nil;
     CGPoint hitPoint = CGPointZero;
 
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
@@ -407,7 +406,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
         UIView *view = [w hitTest:windowPoint withEvent:nil];
         if (view) {
             hitView = view;
-            hitWindow = w;
             hitPoint = windowPoint;
             break;
         }
