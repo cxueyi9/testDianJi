@@ -321,7 +321,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
-- (void)collectFloatViews:(UIView *)view intoArray:(NSMutableArray *)array;
+- (void)collectTapableViews:(UIView *)view intoArray:(NSMutableArray *)array;
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
 @end
 
@@ -366,23 +366,48 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 收集所有 FloatView ----
-- (void)collectFloatViews:(UIView *)view intoArray:(NSMutableArray *)array {
-    if ([NSStringFromClass([view class]) isEqualToString:@"FloatView"]) {
-        [array addObject:view];
-        return;
+// ---- 收集所有包含 UITapGestureRecognizer 的视图（跳过 UILabel） ----
+- (void)collectTapableViews:(UIView *)view intoArray:(NSMutableArray *)array {
+    if (!view || view.hidden) return;
+    // 跳过没有手势的 UILabel
+    if ([view isKindOfClass:[UILabel class]]) {
+        BOOL hasTap = NO;
+        for (UIGestureRecognizer *g in view.gestureRecognizers) {
+            if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
+                hasTap = YES;
+                break;
+            }
+        }
+        if (!hasTap) {
+            // 没有手势的 UILabel 跳过，但仍遍历子视图
+            for (UIView *sub in view.subviews) {
+                [self collectTapableViews:sub intoArray:array];
+            }
+            return;
+        }
     }
+    // 检查是否有 UITapGestureRecognizer
+    BOOL hasTap = NO;
+    for (UIGestureRecognizer *g in view.gestureRecognizers) {
+        if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
+            hasTap = YES;
+            break;
+        }
+    }
+    if (hasTap) {
+        [array addObject:view];
+    }
+    // 递归子视图
     for (UIView *sub in view.subviews) {
-        [self collectFloatViews:sub intoArray:array];
+        [self collectTapableViews:sub intoArray:array];
     }
 }
 
-// ---- 只触发手势，不模拟触摸 ----
+// ---- 只触发手势 ----
 - (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
     if (!view) return;
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
     
-    // 只尝试手势
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [g valueForKey:@"targets"];
@@ -418,23 +443,23 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", targetPoint.x, targetPoint.y);
     showTapMarkerAtPoint(targetPoint);
     
-    // 收集所有 FloatView
-    NSMutableArray *floatViews = [NSMutableArray array];
+    // 收集所有包含 UITapGestureRecognizer 的视图
+    NSMutableArray *candidates = [NSMutableArray array];
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
             continue;
         }
         if (w.hidden) continue;
-        [self collectFloatViews:w intoArray:floatViews];
+        [self collectTapableViews:w intoArray:candidates];
     }
     
-    if (floatViews.count == 0) {
-        NSLog(@"[AutoClick] ❌ No FloatView found");
+    if (candidates.count == 0) {
+        NSLog(@"[AutoClick] ❌ No tapable view found");
         return;
     }
     
-    // 按距离排序，选择最近的
-    [floatViews sortUsingComparator:^NSComparisonResult(id a, id b) {
+    // 按距离排序
+    [candidates sortUsingComparator:^NSComparisonResult(id a, id b) {
         UIView *va = (UIView *)a;
         UIView *vb = (UIView *)b;
         CGPoint ca = [va convertPoint:CGPointMake(CGRectGetMidX(va.bounds), CGRectGetMidY(va.bounds)) toView:nil];
@@ -446,11 +471,16 @@ static void showTapMarkerAtPoint(CGPoint point) {
         return NSOrderedSame;
     }];
     
-    UIView *closest = floatViews[0];
-    CGPoint center = CGPointMake(CGRectGetMidX(closest.bounds), CGRectGetMidY(closest.bounds));
-    CGPoint screenCenter = [closest convertPoint:center toView:nil];
-    NSLog(@"[AutoClick] 🎯 Closest FloatView at screen center (%.0f,%.0f)", screenCenter.x, screenCenter.y);
-    [self triggerTapOnView:closest atPoint:screenCenter];
+    // 只选择距离在 150 像素内的候选，避免误触远处视图
+    UIView *closest = candidates[0];
+    CGPoint center = [closest convertPoint:CGPointMake(CGRectGetMidX(closest.bounds), CGRectGetMidY(closest.bounds)) toView:nil];
+    CGFloat distance = hypot(center.x - targetPoint.x, center.y - targetPoint.y);
+    if (distance > 150) {
+        NSLog(@"[AutoClick] ❌ Closest view distance %.1f > 150, abort to avoid mis-tap", distance);
+        return;
+    }
+    NSLog(@"[AutoClick] 🎯 Closest tapable view %@ at screen center (%.0f,%.0f)", NSStringFromClass([closest class]), center.x, center.y);
+    [self triggerTapOnView:closest atPoint:center];
 }
 
 @end
