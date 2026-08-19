@@ -254,7 +254,6 @@ static void showTapMarkerAtPoint(CGPoint point) {
 - (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)array {
     if (!view || view.hidden) return;
     NSString *className = NSStringFromClass([view class]);
-    // 只收集 FloatView 或 UIView（且大小在合理范围内）
     if ([className isEqualToString:@"FloatView"] || [className isEqualToString:@"UIView"]) {
         CGRect frame = view.frame;
         CGFloat w = frame.size.width;
@@ -411,6 +410,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 - (void)performClick;
 - (void)triggerTapOnView:(UIView *)view;
 - (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration;
+- (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)array;
 @end
 
 @implementation AutoClickManager {
@@ -454,12 +454,11 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 方法1：只触发手势（用于老贝贝） ----
+// ---- 🔥 关键方法：只触发手势，不模拟触摸（用于 UIView 类型，如老贝贝） ----
 - (void)triggerTapOnView:(UIView *)view {
     if (!view) return;
-    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@", NSStringFromClass([view class]));
+    NSLog(@"[AutoClick] 🎯 Triggering gesture on %@", NSStringFromClass([view class]));
     
-    // 先尝试无参数手势
     for (UIGestureRecognizer *g in view.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [g valueForKey:@"targets"];
@@ -472,21 +471,20 @@ static void showTapMarkerAtPoint(CGPoint point) {
                         @try {
                             if ([actionTarget respondsToSelector:action]) {
                                 #pragma clang diagnostic push
-                                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
                                 [actionTarget performSelector:action];
-                                #pragma clang diagnostic pop
-                                NSLog(@"[AutoClick] ✅ Gesture action triggered (no params) on %@", actionTarget);
+#pragma clang diagnostic pop
+                                NSLog(@"[AutoClick] ✅ Gesture triggered (no params) on %@", actionTarget);
                                 return;
                             }
                         } @catch (NSException *e) {
-                            // 尝试带参数
                             @try {
                                 if ([actionTarget respondsToSelector:action]) {
                                     #pragma clang diagnostic push
-                                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
                                     [actionTarget performSelector:action withObject:g];
-                                    #pragma clang diagnostic pop
-                                    NSLog(@"[AutoClick] ✅ Gesture action triggered (with gesture) on %@", actionTarget);
+#pragma clang diagnostic pop
+                                    NSLog(@"[AutoClick] ✅ Gesture triggered (with gesture) on %@", actionTarget);
                                     return;
                                 }
                             } @catch (NSException *e2) {
@@ -499,7 +497,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 如果是 UIControl
+    // 如果是 UIControl，发送事件
     if ([view isKindOfClass:[UIControl class]]) {
         @try {
             [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
@@ -510,11 +508,10 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 如果都没有手势，不执行任何操作
     NSLog(@"[AutoClick] ⚠️ No tap gesture found on %@, abort", NSStringFromClass([view class]));
 }
 
-// ---- 方法2：模拟触摸（用于其他插件） ----
+// ---- 发送触摸事件（用于 FloatView 类型） ----
 - (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration {
     if (!window) {
         NSLog(@"[AutoClick] ❌ Window is nil");
@@ -548,13 +545,29 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
 }
 
+// ---- 收集视图（与设置界面逻辑一致） ----
+- (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)array {
+    if (!view || view.hidden) return;
+    NSString *className = NSStringFromClass([view class]);
+    if ([className isEqualToString:@"FloatView"] || [className isEqualToString:@"UIView"]) {
+        CGRect frame = view.frame;
+        CGFloat w = frame.size.width;
+        CGFloat h = frame.size.height;
+        if (w >= 20 && w <= 120 && h >= 20 && h <= 120) {
+            [array addObject:view];
+        }
+    }
+    for (UIView *sub in view.subviews) {
+        [self collectViews:sub intoArray:array];
+    }
+}
+
 // ---- 点击入口 ----
 - (void)performClick {
     CGPoint targetPoint = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", targetPoint.x, targetPoint.y);
     showTapMarkerAtPoint(targetPoint);
     
-    // 收集所有候选视图
     NSMutableArray *candidates = [NSMutableArray array];
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
@@ -578,39 +591,18 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🎯 Using candidate index %ld: %@", (long)gSelectedIndex, NSStringFromClass([target class]));
     
     // ---- 根据视图类型选择点击方式 ----
-    // 判断是否为老贝贝的视图：类名是 UIView 且中心 x 坐标 > 300（屏幕右侧）
-    // 或者可以更精确地判断 frame 在右侧区域
-    CGPoint center = [target convertPoint:CGPointMake(CGRectGetMidX(target.bounds), CGRectGetMidY(target.bounds)) toView:nil];
-    BOOL isLaobeibei = ([NSStringFromClass([target class]) isEqualToString:@"UIView"] && center.x > 300);
-    
-    if (isLaobeibei) {
-        NSLog(@"[AutoClick] 🎯 Detected Laobeibei view, using triggerTapOnView (gesture)");
+    if ([target isKindOfClass:[UIView class]] && ![target isKindOfClass:NSClassFromString(@"FloatView")]) {
+        // 老贝贝图标是普通 UIView，使用手势触发
         [self triggerTapOnView:target];
     } else {
-        NSLog(@"[AutoClick] 🎯 Using sendTapAtPoint (touch simulation)");
+        // FloatView 使用触摸模拟
+        CGPoint center = [target convertPoint:CGPointMake(CGRectGetMidX(target.bounds), CGRectGetMidY(target.bounds)) toView:nil];
         UIWindow *window = target.window;
         if (window) {
             [self sendTapAtPoint:center inWindow:window withDuration:0.2];
         } else {
             NSLog(@"[AutoClick] ❌ Target view has no window");
         }
-    }
-}
-
-// ---- 收集视图（与设置界面一致） ----
-- (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)array {
-    if (!view || view.hidden) return;
-    NSString *className = NSStringFromClass([view class]);
-    if ([className isEqualToString:@"FloatView"] || [className isEqualToString:@"UIView"]) {
-        CGRect frame = view.frame;
-        CGFloat w = frame.size.width;
-        CGFloat h = frame.size.height;
-        if (w >= 20 && w <= 120 && h >= 20 && h <= 120) {
-            [array addObject:view];
-        }
-    }
-    for (UIView *sub in view.subviews) {
-        [self collectViews:sub intoArray:array];
     }
 }
 
