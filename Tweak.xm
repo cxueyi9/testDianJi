@@ -94,7 +94,6 @@ static void saveConfig(void) {
 // ============================================
 static void showTapMarkerAtPoint(CGPoint point) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // 查找我们自己的悬浮窗
         UIWindow *targetWindow = nil;
         for (UIWindow *w in [UIApplication sharedApplication].windows) {
             if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
@@ -103,12 +102,10 @@ static void showTapMarkerAtPoint(CGPoint point) {
             }
         }
         if (!targetWindow) {
-            // 降级方案：使用 key window
             targetWindow = GetKeyWindow();
         }
         if (!targetWindow) return;
         
-        // 移除旧的标记点
         UIView *oldMarker = [targetWindow viewWithTag:9999];
         if (oldMarker) [oldMarker removeFromSuperview];
         
@@ -328,6 +325,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 - (void)performClick;
 - (UIView *)findFloatViewInView:(UIView *)view;
 - (void)sendTapAtPoint:(CGPoint)point;
+- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
 @end
 
 @implementation AutoClickManager {
@@ -397,6 +395,51 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
 }
 
+// ---- 触发点击（尝试手势和UIControl） ----
+- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
+    if (!view) return;
+    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@", NSStringFromClass([view class]));
+    
+    // 1. 检查手势
+    for (UIGestureRecognizer *g in view.gestureRecognizers) {
+        if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
+            id targets = [g valueForKey:@"targets"];
+            if (targets) {
+                NSArray *targetsArray = (NSArray *)targets;
+                for (id targetObj in targetsArray) {
+                    id actionTarget = [targetObj valueForKey:@"target"];
+                    SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
+                    if (actionTarget && action) {
+                        @try {
+                            if ([actionTarget respondsToSelector:action]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                                [actionTarget performSelector:action withObject:g];
+#pragma clang diagnostic pop
+                                NSLog(@"[AutoClick] ✅ Gesture action triggered");
+                                return;
+                            }
+                        } @catch (NSException *e) {
+                            NSLog(@"[AutoClick] ⚠️ Exception: %@", e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // 2. 如果是 UIControl
+    if ([view isKindOfClass:[UIControl class]]) {
+        [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
+        NSLog(@"[AutoClick] ✅ UIControl action sent");
+        return;
+    }
+    
+    // 3. 回退到 PTFakeTouch
+    CGPoint screenPoint = [view convertPoint:point toView:nil];
+    [self sendTapAtPoint:screenPoint];
+}
+
 - (void)performClick {
     CGPoint point = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
@@ -413,12 +456,12 @@ static void showTapMarkerAtPoint(CGPoint point) {
             CGPoint center = CGPointMake(CGRectGetMidX(floatView.bounds), CGRectGetMidY(floatView.bounds));
             CGPoint screenCenter = [floatView convertPoint:center toView:nil];
             NSLog(@"[AutoClick] 📐 FloatView center at screen: (%.0f,%.0f)", screenCenter.x, screenCenter.y);
-            [self sendTapAtPoint:screenCenter];
+            [self triggerTapOnView:floatView atPoint:screenCenter];
             return;
         }
     }
     
-    // ---- 策略2: hitTest ----
+    // ---- 策略2: hitTest 并向上查找可点击视图 ----
     UIView *hitView = nil;
     CGPoint hitPoint = CGPointZero;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
@@ -428,7 +471,11 @@ static void showTapMarkerAtPoint(CGPoint point) {
         if (w.hidden) continue;
         CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
         UIView *view = [w hitTest:windowPoint withEvent:nil];
-        if (view && ![view isKindOfClass:NSClassFromString(@"FlutterView")] && ![view isKindOfClass:[UIWindow class]]) {
+        if (view) {
+            // 跳过 FlutterView 和 UIWindow
+            if ([view isKindOfClass:NSClassFromString(@"FlutterView")] || [view isKindOfClass:[UIWindow class]]) {
+                continue;
+            }
             hitView = view;
             hitPoint = windowPoint;
             break;
@@ -436,13 +483,28 @@ static void showTapMarkerAtPoint(CGPoint point) {
     }
     
     if (hitView) {
-        NSLog(@"[AutoClick] 🎯 Found view via hitTest: %@", NSStringFromClass([hitView class]));
-        if ([hitView isKindOfClass:[UIControl class]]) {
-            [(UIControl *)hitView sendActionsForControlEvents:UIControlEventTouchUpInside];
-            NSLog(@"[AutoClick] ✅ UIControl action sent");
-            return;
+        NSLog(@"[AutoClick] 🎯 hitTest found: %@", NSStringFromClass([hitView class]));
+        // 向上查找可点击父视图
+        UIView *target = hitView;
+        while (target) {
+            // 检查是否有手势或 UIControl
+            BOOL hasTapGesture = NO;
+            for (UIGestureRecognizer *g in target.gestureRecognizers) {
+                if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
+                    hasTapGesture = YES;
+                    break;
+                }
+            }
+            if (hasTapGesture || [target isKindOfClass:[UIControl class]]) {
+                NSLog(@"[AutoClick] 🎯 Found responsive parent: %@", NSStringFromClass([target class]));
+                [self triggerTapOnView:target atPoint:[target convertPoint:hitPoint fromView:hitView.superview]];
+                return;
+            }
+            target = target.superview;
         }
-        [self sendTapAtPoint:hitPoint];
+        // 如果没有找到可点击父视图，直接用 hitView
+        NSLog(@"[AutoClick] ⚠️ No responsive parent, using hitView directly");
+        [self triggerTapOnView:hitView atPoint:hitPoint];
     } else {
         NSLog(@"[AutoClick] ❌ No view found");
     }
