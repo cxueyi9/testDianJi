@@ -410,6 +410,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
 + (instancetype)sharedManager;
 - (void)performClick;
 - (void)triggerTapOnView:(UIView *)view;
+- (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration;
 @end
 
 @implementation AutoClickManager {
@@ -453,7 +454,7 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 🔥 关键方法：只触发手势，不模拟触摸 ----
+// ---- 方法1：只触发手势（用于老贝贝） ----
 - (void)triggerTapOnView:(UIView *)view {
     if (!view) return;
     NSLog(@"[AutoClick] 🎯 Trying to trigger on %@", NSStringFromClass([view class]));
@@ -513,13 +514,47 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] ⚠️ No tap gesture found on %@, abort", NSStringFromClass([view class]));
 }
 
+// ---- 方法2：模拟触摸（用于其他插件） ----
+- (void)sendTapAtPoint:(CGPoint)screenPoint inWindow:(UIWindow *)window withDuration:(NSTimeInterval)duration {
+    if (!window) {
+        NSLog(@"[AutoClick] ❌ Window is nil");
+        return;
+    }
+    CGPoint windowPoint = [window convertPoint:screenPoint fromWindow:nil];
+    NSLog(@"[AutoClick] 📱 Sending touch at screen(%.0f,%.0f) -> window(%.0f,%.0f) duration %.2f", screenPoint.x, screenPoint.y, windowPoint.x, windowPoint.y, duration);
+    
+    @try {
+        UITouch *touch = [[UITouch alloc] initAtPoint:windowPoint inWindow:window];
+        if (!touch) { return; }
+        [touch setPhaseAndUpdateTimestamp:UITouchPhaseBegan];
+        [touch setTapCount:1];
+        
+        UIEvent *event = [[UIApplication sharedApplication] _touchesEvent];
+        [event _clearTouches];
+        [event kif_setEventWithTouches:@[touch]];
+        [event _addTouch:touch forDelayedDelivery:NO];
+        [[UIApplication sharedApplication] sendEvent:event];
+        
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [touch setPhaseAndUpdateTimestamp:UITouchPhaseEnded];
+            [event _clearTouches];
+            [event kif_setEventWithTouches:@[touch]];
+            [event _addTouch:touch forDelayedDelivery:NO];
+            [[UIApplication sharedApplication] sendEvent:event];
+            NSLog(@"[AutoClick] ✅ Touch ended");
+        });
+    } @catch (NSException *e) {
+        NSLog(@"[AutoClick] ❌ Exception in sendTapAtPoint: %@", e);
+    }
+}
+
 // ---- 点击入口 ----
 - (void)performClick {
     CGPoint targetPoint = CGPointMake(gClickX, gClickY);
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", targetPoint.x, targetPoint.y);
     showTapMarkerAtPoint(targetPoint);
     
-    // 收集所有候选视图（与设置界面一致）
+    // 收集所有候选视图
     NSMutableArray *candidates = [NSMutableArray array];
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
@@ -541,10 +576,28 @@ static void showTapMarkerAtPoint(CGPoint point) {
     
     UIView *target = candidates[gSelectedIndex];
     NSLog(@"[AutoClick] 🎯 Using candidate index %ld: %@", (long)gSelectedIndex, NSStringFromClass([target class]));
-    [self triggerTapOnView:target];
+    
+    // ---- 根据视图类型选择点击方式 ----
+    // 判断是否为老贝贝的视图：类名是 UIView 且中心 x 坐标 > 300（屏幕右侧）
+    // 或者可以更精确地判断 frame 在右侧区域
+    CGPoint center = [target convertPoint:CGPointMake(CGRectGetMidX(target.bounds), CGRectGetMidY(target.bounds)) toView:nil];
+    BOOL isLaobeibei = ([NSStringFromClass([target class]) isEqualToString:@"UIView"] && center.x > 300);
+    
+    if (isLaobeibei) {
+        NSLog(@"[AutoClick] 🎯 Detected Laobeibei view, using triggerTapOnView (gesture)");
+        [self triggerTapOnView:target];
+    } else {
+        NSLog(@"[AutoClick] 🎯 Using sendTapAtPoint (touch simulation)");
+        UIWindow *window = target.window;
+        if (window) {
+            [self sendTapAtPoint:center inWindow:window withDuration:0.2];
+        } else {
+            NSLog(@"[AutoClick] ❌ Target view has no window");
+        }
+    }
 }
 
-// ---- 收集视图（与设置界面逻辑一致） ----
+// ---- 收集视图（与设置界面一致） ----
 - (void)collectViews:(UIView *)view intoArray:(NSMutableArray *)array {
     if (!view || view.hidden) return;
     NSString *className = NSStringFromClass([view class]);
