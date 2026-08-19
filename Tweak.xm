@@ -12,7 +12,7 @@
 @class AutoClickFloatingWindow;
 
 // ============================================
-// 辅助函数
+// 辅助函数：获取当前 key window（备用）
 // ============================================
 static UIWindow* GetKeyWindow(void) {
     UIWindow *window = nil;
@@ -311,8 +311,11 @@ static void showTapMarkerAtPoint(CGPoint point) {
 @interface AutoClickManager : NSObject
 + (instancetype)sharedManager;
 - (void)performClick;
-- (void)tryTapAllViewsAtPoint:(CGPoint)point;
-- (void)simulateTapOnView:(UIView *)view atPoint:(CGPoint)point;
+- (UIView *)findTargetViewAtPoint:(CGPoint)point inView:(UIView *)view;
+- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point;
+- (void)simulateTapOnFloatView:(UIView *)floatView atPoint:(CGPoint)point;
+- (void)simulateTapOnImageView:(UIView *)imageView;
+- (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView;
 @end
 
 @implementation AutoClickManager {
@@ -356,52 +359,41 @@ static void showTapMarkerAtPoint(CGPoint point) {
     _floatingWindow.hidden = NO;
 }
 
-// ---- 递归遍历所有子视图，尝试点击包含该点的视图 ----
-- (void)tryTapAllViewsAtPoint:(CGPoint)point {
-    // 收集所有可能的视图（包括窗口本身）
-    NSMutableArray *allViews = [NSMutableArray array];
-    for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) continue;
-        [allViews addObject:w];
-        [self addSubviewsToArray:w intoArray:allViews];
+// ---- 递归查找包含点击坐标且具有手势识别器的视图 ----
+- (UIView *)findTargetViewAtPoint:(CGPoint)point inView:(UIView *)view {
+    if (!view || view.hidden || !view.userInteractionEnabled) {
+        return nil;
     }
-    
-    // 对每个视图，检查其屏幕坐标是否包含点击点
-    for (UIView *view in allViews) {
-        // 跳过隐藏或不可交互的视图（但强制尝试）
-        if (view.hidden || view.alpha < 0.1) continue;
-        // 获取视图在屏幕上的frame
-        CGRect screenFrame = [view convertRect:view.bounds toView:nil];
-        if (CGRectContainsPoint(screenFrame, point)) {
-            NSLog(@"[AutoClick] 🎯 Found view %@ at screen frame %@", NSStringFromClass([view class]), NSStringFromCGRect(screenFrame));
-            // 尝试触发点击
-            [self simulateTapOnView:view atPoint:point];
-            // 如果点击成功（通过手势或事件），可能不需要继续，但为了安全我们继续尝试所有视图
-            // 但为了不误触，我们只尝试第一个匹配的视图，如果它没有响应，再尝试下一个
-            // 这里我们先尝试所有，并记录日志
+    // 检查视图是否包含点击点（转换到视图坐标系）
+    CGPoint localPoint = [view convertPoint:point fromView:nil];
+    if (![view pointInside:localPoint withEvent:nil]) {
+        return nil;
+    }
+    // 先检查子视图（深度优先，优先匹配更精确的视图）
+    for (UIView *subview in [view.subviews reverseObjectEnumerator]) {
+        UIView *found = [self findTargetViewAtPoint:point inView:subview];
+        if (found) {
+            return found;
         }
     }
+    // 如果当前视图有手势识别器，并且包含 UITapGestureRecognizer，则返回它
+    for (UIGestureRecognizer *gesture in view.gestureRecognizers) {
+        if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
+            // 确保视图在屏幕上可见（非完全透明，但简单起见）
+            return view;
+        }
+    }
+    // 如果是 UIControl 且可以交互，也返回
+    if ([view isKindOfClass:[UIControl class]] && view.userInteractionEnabled) {
+        return view;
+    }
+    return nil;
 }
 
-- (void)addSubviewsToArray:(UIView *)view intoArray:(NSMutableArray *)array {
-    for (UIView *sub in view.subviews) {
-        [array addObject:sub];
-        [self addSubviewsToArray:sub intoArray:array];
-    }
-}
-
-// ---- 对单个视图执行点击模拟 ----
-- (void)simulateTapOnView:(UIView *)view atPoint:(CGPoint)point {
-    NSLog(@"[AutoClick] 🖱️ Trying to tap view %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
-    
-    // 1. 如果是 UIControl，发送事件
-    if ([view isKindOfClass:[UIControl class]]) {
-        [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
-        NSLog(@"[AutoClick] ✅ UIControl action sent");
-        return;
-    }
-    
-    // 2. 遍历手势识别器
+// ---- 触发视图的点击（手势或 UIControl） ----
+- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
+    NSLog(@"[AutoClick] 🎯 Triggering tap on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
+    // 优先触发手势识别器
     for (UIGestureRecognizer *gesture in view.gestureRecognizers) {
         if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
             id targets = [gesture valueForKey:@"targets"];
@@ -415,15 +407,20 @@ static void showTapMarkerAtPoint(CGPoint point) {
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
                         [actionTarget performSelector:action withObject:gesture];
 #pragma clang diagnostic pop
-                        NSLog(@"[AutoClick] ✅ Gesture action triggered on %@", actionTarget);
+                        NSLog(@"[AutoClick] ✅ Gesture action triggered");
                     }
                 }
             }
             return;
         }
     }
-    
-    // 3. 直接调用 touchesBegan/Ended
+    // 如果是 UIControl，发送事件
+    if ([view isKindOfClass:[UIControl class]]) {
+        [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
+        NSLog(@"[AutoClick] ✅ UIControl action sent");
+        return;
+    }
+    // 如果都没有，直接调用 touchesBegan/Ended（慎用）
     UITouch *touch = [[UITouch alloc] initAtPoint:point inView:view];
     [view touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
     [view touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
@@ -435,32 +432,55 @@ static void showTapMarkerAtPoint(CGPoint point) {
     NSLog(@"[AutoClick] 🚀 Perform click at (%.0f, %.0f)", point.x, point.y);
     showTapMarkerAtPoint(point);
     
-    // ---- 方法1：遍历所有视图强制点击 ----
-    [self tryTapAllViewsAtPoint:point];
-    
-    // ---- 方法2：回退到常规 hitTest（保留） ----
-    UIView *hitView = nil;
-    CGPoint hitPoint = CGPointZero;
+    // ---- 遍历所有窗口，递归查找可点击视图 ----
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) continue;
-        if (w.hidden || !w.rootViewController) continue;
+        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
+            continue;
+        }
+        if (w.hidden || !w.userInteractionEnabled) {
+            continue;
+        }
+        UIView *targetView = [self findTargetViewAtPoint:point inView:w];
+        if (targetView) {
+            NSLog(@"[AutoClick] 🎯 Found target view: %@ at frame %@", NSStringFromClass([targetView class]), NSStringFromCGRect(targetView.frame));
+            [self triggerTapOnView:targetView atPoint:point];
+            return;
+        }
+    }
+    
+    // ---- 如果没找到，回退到 hitTest 简单处理 ----
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if ([NSStringFromClass([w class]) isEqualToString:@"AutoClickFloatingWindow"]) {
+            continue;
+        }
+        if (w.hidden) continue;
         CGPoint windowPoint = [w convertPoint:point fromWindow:nil];
-        UIView *view = [w hitTest:windowPoint withEvent:nil];
-        if (view) {
-            hitView = view;
-            hitPoint = windowPoint;
-            break;
+        UIView *hitView = [w hitTest:windowPoint withEvent:nil];
+        if (hitView) {
+            NSLog(@"[AutoClick] 🎯 Fallback hitTest -> %@", NSStringFromClass([hitView class]));
+            [self triggerTapOnView:hitView atPoint:windowPoint];
+            return;
         }
     }
-    if (hitView) {
-        NSLog(@"[AutoClick] 🔁 Fallback hitTest -> %@", NSStringFromClass([hitView class]));
-        // 如果 hitTest 返回了非 FlutterView，则尝试点击
-        if (![hitView isKindOfClass:NSClassFromString(@"FlutterView")]) {
-            [self simulateTapOnView:hitView atPoint:hitPoint];
-        }
-    } else {
-        NSLog(@"[AutoClick] ❌ No view found");
-    }
+    NSLog(@"[AutoClick] ❌ No view found to tap");
+}
+
+// ---- 以下为备用函数（保留但不再使用） ----
+- (void)simulateTapOnFloatView:(UIView *)floatView atPoint:(CGPoint)point {
+    [self triggerTapOnView:floatView atPoint:point];
+}
+
+- (void)simulateTapOnImageView:(UIView *)imageView {
+    CGPoint center = [imageView convertPoint:imageView.center toView:nil];
+    [self triggerTapOnView:imageView atPoint:center];
+}
+
+- (void)simulateFlutterTouchAtPoint:(CGPoint)point onView:(UIView *)flutterView {
+    // FlutterView 可能无法通过手势识别，保持原有直接 touches 方式
+    UITouch *touch = [[UITouch alloc] initAtPoint:point inView:flutterView];
+    [flutterView touchesBegan:[NSSet setWithObject:touch] withEvent:nil];
+    [flutterView touchesEnded:[NSSet setWithObject:touch] withEvent:nil];
+    NSLog(@"[AutoClick] ✅ FlutterView touches sent");
 }
 
 @end
