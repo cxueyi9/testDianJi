@@ -511,34 +511,71 @@ static void showTapMarkerAtPoint(CGPoint point) {
         }
     }
     
-    // 从 targetView 向上查找可点击父视图（最多5层）
-    UIView *current = targetView;
-    int depth = 0;
-    while (current && depth < 5) {
-        BOOL hasTap = NO;
-        for (UIGestureRecognizer *g in current.gestureRecognizers) {
-            if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
-                hasTap = YES;
-                break;
+    // 直接获取 targetView 在屏幕上的中心点
+    CGPoint center = CGPointMake(CGRectGetMidX(targetView.bounds), CGRectGetMidY(targetView.bounds));
+    CGPoint screenCenter = [targetView convertPoint:center toView:nil];
+    NSLog(@"[AutoClick] 📐 Target view center on screen: (%.0f,%.0f)", screenCenter.x, screenCenter.y);
+    
+    // 直接使用屏幕中心点触发
+    [self triggerTapOnView:targetView atPoint:screenCenter];
+}
+
+- (void)triggerTapOnView:(UIView *)view atPoint:(CGPoint)point {
+    if (!view) return;
+    NSLog(@"[AutoClick] 🎯 Trying to trigger on %@ at point (%.0f,%.0f)", NSStringFromClass([view class]), point.x, point.y);
+    
+    // 先尝试无参数执行手势
+    for (UIGestureRecognizer *g in view.gestureRecognizers) {
+        if ([g isKindOfClass:[UITapGestureRecognizer class]]) {
+            id targets = [g valueForKey:@"targets"];
+            if (targets) {
+                NSArray *targetsArray = (NSArray *)targets;
+                for (id targetObj in targetsArray) {
+                    id actionTarget = [targetObj valueForKey:@"target"];
+                    SEL action = NSSelectorFromString([targetObj valueForKey:@"action"]);
+                    if (actionTarget && action) {
+                        @try {
+                            if ([actionTarget respondsToSelector:action]) {
+                                #pragma clang diagnostic push
+                                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                                [actionTarget performSelector:action];
+                                #pragma clang diagnostic pop
+                                NSLog(@"[AutoClick] ✅ Gesture action triggered (no params) on %@", actionTarget);
+                                return;
+                            }
+                        } @catch (NSException *e) {
+                            @try {
+                                if ([actionTarget respondsToSelector:action]) {
+                                    #pragma clang diagnostic push
+                                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                                    [actionTarget performSelector:action withObject:g];
+                                    #pragma clang diagnostic pop
+                                    NSLog(@"[AutoClick] ✅ Gesture action triggered (with gesture) on %@", actionTarget);
+                                    return;
+                                }
+                            } @catch (NSException *e2) {
+                                NSLog(@"[AutoClick] ❌ Exception: %@", e2);
+                            }
+                        }
+                    }
+                }
             }
         }
-        if (hasTap || [current isKindOfClass:[UIControl class]]) {
-            NSLog(@"[AutoClick] 🎯 Found responsive parent: %@", NSStringFromClass([current class]));
-            CGPoint convertedPoint = [current convertPoint:hitPoint fromView:hitView.superview];
-            [self triggerTapOnView:current atPoint:convertedPoint];
-            return;
-        }
-        current = current.superview;
-        depth++;
     }
     
-    // 如果没找到任何可点击父视图，直接使用 targetView
-    NSLog(@"[AutoClick] ⚠️ No responsive parent found, using targetView: %@", NSStringFromClass([targetView class]));
-    CGPoint screenPoint = [targetView convertPoint:hitPoint fromView:hitView.superview];
-    if ([targetView isKindOfClass:[UIWindow class]]) {
-        screenPoint = hitPoint;
+    // 如果是 UIControl
+    if ([view isKindOfClass:[UIControl class]]) {
+        @try {
+            [(UIControl *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
+            NSLog(@"[AutoClick] ✅ UIControl action sent");
+            return;
+        } @catch (NSException *e) {
+            NSLog(@"[AutoClick] ⚠️ UIControl exception: %@", e);
+        }
     }
-    [self triggerTapOnView:targetView atPoint:screenPoint];
+    
+    // 如果都没有，使用 PTFakeTouch（点已经是屏幕坐标）
+    [self sendTapAtPoint:point];
 }
 
 @end
